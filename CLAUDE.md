@@ -1,96 +1,168 @@
-# CLAUDE Technical Log and Decisions
+# CLAUDE Technical Log and Decisions (Python FastAPI + Transformers)
+## Progress Log — 2025-10-23 (Asia/Jakarta)
 
-This document is the developer-facing changelog, decisions log, and notes for this repository. It mirrors key rules and captures the rationale behind implementation choices. Operator-facing usage belongs in [README.md](README.md); architecture belongs in [ARCHITECTURE.md](ARCHITECTURE.md); binding rules live in [RULES.md](RULES.md); task tracking lives in [TODO.md](TODO.md).
+- Migrated stack from Node.js/llama.cpp to Python + FastAPI + Transformers
+  - New server: [main.py](main.py)
+  - Default model: Qwen/Qwen3-VL-2B-Thinking via Transformers with trust_remote_code
+- Implemented endpoints
+  - Health: [Python.app.get()](main.py:577)
+  - OpenAI-compatible Chat Completions (non-stream + SSE): [Python.app.post()](main.py:591)
+  - Manual cancel (custom extension): [Python.app.post()](main.py:792)
+- Multimodal support
+  - OpenAI-style messages mapped in [Python.function build_mm_messages](main.py:251)
+  - Image loader: [Python.function load_image_from_any](main.py:108)
+  - Video loader (frame sampling): [Python.function load_video_frames_from_any](main.py:150)
+- Streaming + resume + persistence
+  - SSE with session_id + Last-Event-ID
+  - In-memory session ring buffer: [Python.class _SSESession](main.py:435), manager [Python.class _SessionStore](main.py:449)
+  - Optional SQLite persistence: [Python.class _SQLiteStore](main.py:482) with replay across restarts
+- Cancellation
+  - Auto-cancel after all clients disconnect for CANCEL_AFTER_DISCONNECT_SECONDS, timer wiring in [Python.function chat_completions](main.py:733), cooperative stop in [Python.function infer_stream](main.py:375)
+  - Manual cancel API: [Python.function cancel_session](main.py:792)
+- Configuration and dependencies
+  - Env template updated: [.env.example](.env.example) with MODEL_REPO_ID, PERSIST_SESSIONS, SESSIONS_DB_PATH, SESSIONS_TTL_SECONDS, CANCEL_AFTER_DISCONNECT_SECONDS, etc.
+  - Python deps: [requirements.txt](requirements.txt)
+  - Git ignores for Python + artifacts: [.gitignore](.gitignore)
+- Documentation refreshed
+  - Operator docs: [README.md](README.md) including SSE resume, SQLite, cancel API
+  - Architecture: [ARCHITECTURE.md](ARCHITECTURE.md) aligned to Python flows
+  - Rules: [RULES.md](RULES.md) updated — Git usage is mandatory
+- Legacy removal
+  - Deleted Node files and scripts (index.js, package*.json, scripts/) as requested
 
-Repository links:
-- [RULES.md](RULES.md)
-- [README.md](README.md)
-- [ARCHITECTURE.md](ARCHITECTURE.md)
-- [TODO.md](TODO.md)
-- [index.js](index.js)
+Suggested Git commit series (run in order)
+- git add .
+- git commit -m "feat(server): add FastAPI OpenAI-compatible /v1/chat/completions with Qwen3-VL [Python.main()](main.py:1)"
+- git commit -m "feat(stream): SSE streaming with session_id resume and in-memory sessions [Python.function chat_completions()](main.py:591)"
+- git commit -m "feat(persist): SQLite-backed replay for SSE sessions [Python.class _SQLiteStore](main.py:482)"
+- git commit -m "feat(cancel): auto-cancel after disconnect and POST /v1/cancel/{session_id} [Python.function cancel_session](main.py:792)"
+- git commit -m "docs: update README/ARCHITECTURE/RULES for Python stack and streaming resume"
+- git push
 
-Summary of binding rules (mirror)
-Refer to [RULES.md](RULES.md) for authoritative wording. Key obligations:
-- Always document changes in [README.md](README.md), [CLAUDE.md](CLAUDE.md), and—when design is affected—[ARCHITECTURE.md](ARCHITECTURE.md). Update [TODO.md](TODO.md) statuses immediately.
-- After every progress step, run git add ., git commit, and git push. Use conventional commit messages.
-- Never commit large artifacts. Keep node_modules and models out of git via [.gitignore](.gitignore).
-- Provide OpenAI-compatible POST /v1/chat/completions, with validation, logging, and error handling.
-- Maintain Node.js >= 20, Python >= 3.10 for conversion tooling.
+Verification snapshot
+- Non-stream text works via [Python.function infer](main.py:326)
+- Streaming emits chunks and ends with [DONE]
+- Resume works with Last-Event-ID; persists across restart when PERSIST_SESSIONS=1
+- Manual cancel stops generation; auto-cancel triggers after disconnect threshold
 
-2025-10-23 – Change log
-- Added [RULES.md](RULES.md) capturing workflow, documentation discipline, large-artifact policy, API contract, logging, and architecture/documentation responsibilities.
-- Established plan to auto-download the model from Hugging Face, convert to GGUF, and load it at runtime via node-llama-cpp. Tracked in [TODO.md](TODO.md).
-- Noted potential format support caveat: Target model is Qwen/Qwen3-VL-2B-Thinking-FP8 (TensorFlow, vision-language). Standard llama.cpp GGUF conversion primarily targets LLaMA/Qwen LLM weights in PyTorch/transformers formats; VLM TensorFlow FP8 may be unsupported. Implementation will detect and fail fast with guidance if conversion is not viable.
 
-Model lifecycle design (download → convert → load)
-- Download location: ./models/Qwen3-VL-2B-Thinking-FP8 (ignored by git).
-- Download approach: node-based downloader with resume and checksum where available. Prefer direct file pulls from Hugging Face via HTTPS; fallback to git-lfs if installed.
-- Conversion: attempt llama.cpp convert-hf-to-gguf.py with appropriate flags for Qwen models. If the TensorFlow FP8 layout is unsupported, emit a clear error and suggest alternatives (e.g., Qwen2/Qwen2.5 GGUF releases).
-- Loading: configure node-llama-cpp to load the produced .gguf path; pass model options (context length, GPU layers) via environment variables.
+This is the developer-facing changelog and design rationale for the Python migration. Operator docs live in [README.md](README.md); architecture details in [ARCHITECTURE.md](ARCHITECTURE.md); rules in [RULES.md](RULES.md); task tracking in [TODO.md](TODO.md).
 
-Planned scripts and npm hooks
-- download-model: downloads artifacts to ./models
-- convert-model: runs conversion to GGUF (Python dependency)
-- setup-model: orchestrates download + convert; idempotent and safe to re-run
-- start/dev: runs server; server verifies presence of GGUF and prompts to run setup-model if missing
-- postinstall: optional guard to warn if Node & Python versions are insufficient
+Key source file references
+- Server entry: [Python.main()](main.py:807)
+- Health endpoint: [Python.app.get()](main.py:577)
+- Chat Completions endpoint (non-stream + SSE): [Python.app.post()](main.py:591)
+- Manual cancel endpoint (custom): [Python.app.post()](main.py:792)
+- Engine (Transformers): [Python.class Engine](main.py:231)
+- Multimodal mapping: [Python.function build_mm_messages](main.py:251)
+- Image loader: [Python.function load_image_from_any](main.py:108)
+- Video loader: [Python.function load_video_frames_from_any](main.py:150)
+- Non-stream inference: [Python.function infer](main.py:326)
+- Streaming inference + stopping criteria: [Python.function infer_stream](main.py:375)
+- In-memory sessions: [Python.class _SSESession](main.py:435), [Python.class _SessionStore](main.py:449)
+- SQLite persistence: [Python.class _SQLiteStore](main.py:482)
 
-Pre-requisites (developer machine)
-- Node.js 20+
-- Python 3.10+
-- git and git-lfs recommended for large files
-- CMake/Build tools may be required by node-llama-cpp if prebuilt binaries are not used
+Summary of the migration
+- Replaced the Node.js/llama.cpp stack with a Python FastAPI server that uses Hugging Face Transformers for Qwen3-VL multimodal inference.
+- Exposes an OpenAI-compatible /v1/chat/completions endpoint (non-stream and streaming via SSE).
+- Supports text, images, and videos:
+  - Messages can include array parts such as "text", "image_url" / "input_image" (base64), "video_url" / "input_video" (base64).
+  - Images are decoded to PIL in [Python.function load_image_from_any](main.py:108).
+  - Videos are read via imageio.v3 (preferred) or OpenCV, sampled to up to MAX_VIDEO_FRAMES in [Python.function load_video_frames_from_any](main.py:150).
+- Streaming includes resumability with session_id + Last-Event-ID:
+  - In-memory ring buffer: [Python.class _SSESession](main.py:435)
+  - Optional SQLite persistence: [Python.class _SQLiteStore](main.py:482)
+- Added a manual cancel endpoint (custom) and implemented auto-cancel after disconnect.
 
-API contract notes
-- Implement OpenAI-compatible endpoint: POST /v1/chat/completions
-- Minimal viable response: non-streaming choices array with a single message
-- Validation: ensure messages is an array; model is accepted but overridden by configured model if needed
-- Logging: structured logs with redaction and correlation id
+Why Python + Transformers?
+- Qwen3-VL-2B-Thinking is published for Transformers and includes multimodal processors (preprocessor_config.json, video_preprocessor_config.json, chat_template.json). Python + Transformers is the first-class path.
+- trust_remote_code=True allows the model repo to provide custom processing logic and templates, used in [Python.class Engine](main.py:231) via AutoProcessor/AutoModelForCausalLM.
 
-Error handling and observability
-- Detect missing model or missing GGUF; return 503 with actionable message and include next-steps hint to run npm run setup-model
-- Timeouts for long inferences; return 504 with details
-- Wrap node-llama-cpp operations with try/catch and clear error mapping
+Core design choices
 
-License and metadata note
-- LICENSE is a modified Apache 2.0 with royalty linkage. package.json lists "ISC". Aligning these will be scheduled as a follow-up task to avoid legal ambiguity.
+1) OpenAI compatibility
+- Non-stream path returns choices[0].message.content from [Python.function infer](main.py:326).
+- Streaming path (SSE) produces OpenAI-style "chat.completion.chunk" deltas, with id lines "session_id:index" for resume.
+- We retained Chat Completions (legacy) rather than the newer Responses API for compatibility with existing SDKs. A custom cancel endpoint is provided to fill the gap.
 
-Git discipline template
-Commit after each progress step:
+2) Multimodal input handling
+- The API accepts "messages" with content either as a string or an array of parts typed as "text" / "image_url" / "input_image" / "video_url" / "input_video".
+- Images: URLs (http/https or data URL), base64, or local path are supported by [Python.function load_image_from_any](main.py:108).
+- Videos: URLs and base64 are materialized to a temp file; frames extracted and uniformly sampled by [Python.function load_video_frames_from_any](main.py:150).
 
-Conventional examples:
-- feat(model): add auto-download script for Qwen3-VL-2B-Thinking-FP8
-- chore(docs): add RULES and mirror in CLAUDE
-- feat(api): implement POST /v1/chat/completions
-- fix(model): handle unsupported conversion formats with clear guidance
+3) Engine and generation
+- Qwen chat template applied via processor.apply_chat_template in both [Python.function infer](main.py:326) and [Python.function infer_stream](main.py:375).
+- Generation sampling uses temperature; do_sample toggled when temperature > 0.
+- Streams are produced using TextIteratorStreamer.
+- Optional cooperative cancellation is implemented with a StoppingCriteria bound to a session cancel event in [Python.function infer_stream](main.py:375).
 
-Verification checklist per commit
-- Code runs (or is behind a feature flag)
-- [README.md](README.md) updated for operators
-- [CLAUDE.md](CLAUDE.md) updated for developers
-- [ARCHITECTURE.md](ARCHITECTURE.md) updated if flows changed
-- [TODO.md](TODO.md) statuses reflect the new state
-- No large artifacts were committed
+4) Streaming, resume, and persistence
+- In-memory buffer per session for immediate replay: [Python.class _SSESession](main.py:435).
+- Optional SQLite persistence to survive restarts and handle long gaps: [Python.class _SQLiteStore](main.py:482).
+- Resume protocol:
+  - Client provides session_id in the request body and Last-Event-ID header "session_id:index", or pass ?last_event_id=...
+  - Server replays events after index from SQLite (if enabled) and the in-memory buffer.
+  - Producer appends events to both the ring buffer and SQLite (when enabled).
 
-Next actionable items (aligned with TODO)
-- Finalize scripts: download-model, convert-model, setup-model (npm run scripts)
-- Wire model load and implement /v1/chat/completions in [index.js](index.js)
-- Update [ARCHITECTURE.md](ARCHITECTURE.md) with end-to-end flows
-- Update [README.md](README.md) with quickstart and troubleshooting
+5) Cancellation and disconnects
+- Manual cancel endpoint [Python.app.post()](main.py:792) sets the session cancel event and marks finished in SQLite.
+- Auto-cancel after disconnect:
+  - If all clients disconnect, a timer fires after CANCEL_AFTER_DISCONNECT_SECONDS (default 3600) that sets the cancel event.
+  - The StoppingCriteria checks this event cooperatively and halts generation.
 
-Operational notes for Qwen3-VL TF FP8
-- If conversion is unsupported, suggest alternatives in logs and docs:
-  - Use an officially provided GGUF for a Qwen text-only model for immediate functionality
-  - Or switch to a supported Qwen3 weight format (e.g., PyTorch/transformers) that convert-hf-to-gguf.py supports
-- The server will still start and expose health, but return a helpful error for inference until a supported model is installed
+6) Environment configuration
+- See [.env.example](.env.example).
+- Important variables:
+  - MODEL_REPO_ID (default "Qwen/Qwen3-VL-2B-Thinking")
+  - HF_TOKEN (optional)
+  - MAX_TOKENS, TEMPERATURE
+  - MAX_VIDEO_FRAMES (video frame sampling)
+  - DEVICE_MAP, TORCH_DTYPE (Transformers loading hints)
+  - PERSIST_SESSIONS, SESSIONS_DB_PATH, SESSIONS_TTL_SECONDS (SQLite)
+  - CANCEL_AFTER_DISCONNECT_SECONDS (auto-cancel threshold)
 
-Health and diagnostics
-- Add GET /health for readiness reporting (model:ready true/false)
-- Log model metadata after load (params, vocab size) if available
+Security and privacy notes
+- trust_remote_code=True executes code from the model repository when loading AutoProcessor/AutoModel. This is standard for many HF multimodal models but should be understood in terms of supply-chain risk.
+- Do not log sensitive data. Avoid dumping raw request bodies or tokens.
 
-Contributing discipline
-- Never bypass the documentation steps
-- Keep commits small and atomic
-- Prefer explicit, reproducible scripts over ad-hoc manual steps
+Operational guidance
+
+Running locally
+- Install Python dependencies from [requirements.txt](requirements.txt) and install a suitable PyTorch wheel for your platform/CUDA.
+- copy .env.example .env and adjust as needed.
+- Start: python [Python.main()](main.py:807)
+
+Testing endpoints
+- Health: GET /health
+- Chat (non-stream): POST /v1/chat/completions with messages array.
+- Chat (stream): add "stream": true; optionally pass "session_id".
+- Resume: send Last-Event-ID with "session_id:index".
+- Cancel: POST /v1/cancel/{session_id}.
+
+Scaling notes
+- Typically deploy one model per process. For throughput, run multiple workers behind a load balancer; sessions are process-local unless persistence is used.
+- SQLite persistence supports replay but does not synchronize cancel/producer state across processes. A Redis-based store (future work) can coordinate multi-process session state more robustly.
+
+Known limitations and follow-ups
+- Token accounting (usage prompt/completion/total) is stubbed at zeros. Populate if/when needed.
+- Redis store not yet implemented (design leaves a clear seam via _SQLiteStore analog).
+- No structured logging/tracing yet; follow-up for observability.
+- Cancellation is best-effort cooperative; it relies on the stopping criteria hook in generation.
+
+Changelog (2025-10-23)
+- feat(server): Python FastAPI server with Qwen3-VL (Transformers), OpenAI-compatible /v1/chat/completions.
+- feat(stream): SSE streaming with session_id + Last-Event-ID resumability.
+- feat(persist): Optional SQLite-backed session persistence for replay across restarts.
+- feat(cancel): Manual cancel endpoint /v1/cancel/{session_id}; auto-cancel after disconnect threshold.
+- docs: Updated [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md), [RULES.md](RULES.md). Rewrote [TODO.md](TODO.md) pending/complete items (see repo TODO).
+- chore: Removed Node.js and scripts from the prior stack.
+
+Verification checklist
+- Non-stream text-only request returns a valid completion.
+- Image and video prompts pass through preprocessing and generate coherent output.
+- Streaming emits OpenAI-style deltas and ends with [DONE].
+- Resume works with Last-Event-ID and session_id across reconnects; works after server restart when PERSIST_SESSIONS=1.
+- Manual cancel halts generation and marks session finished; subsequent resumes return a finished stream.
+- Auto-cancel fires after all clients disconnect for CANCEL_AFTER_DISCONNECT_SECONDS and cooperatively stops generation.
 
 End of entry.

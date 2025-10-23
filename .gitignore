@@ -1,2 +1,29 @@
+# Node (legacy)
 node_modules
-models
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Tool caches
+.cache/
+.mypy_cache/
+.pyright/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Data / models (large artifacts)
+models/
+data/
+uploads/
+tmp/

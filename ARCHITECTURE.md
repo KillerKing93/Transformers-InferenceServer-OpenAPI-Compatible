@@ -1,133 +1,192 @@
-# Architecture
+# Architecture (Python FastAPI + Transformers)
 
-This document describes the end-to-end architecture of the NodeJS Llama.cpp Inference Server, its configuration model (.env-driven), model lifecycle (download → convert → serve), and the OpenAI-compatible request flow.
+This document describes the Python-based, OpenAI-compatible inference server for Qwen3-VL, replacing the previous Node.js/llama.cpp stack.
 
 Key source files
-- [index.js](index.js)
-- [scripts/download-model.js](scripts/download-model.js)
-- [scripts/convert-model.js](scripts/convert-model.js)
-- [scripts/setup-model.js](scripts/setup-model.js)
-- [scripts/postinstall-checks.js](scripts/postinstall-checks.js)
-- [.env.example](.env.example)
-- [README.md](README.md)
-- [RULES.md](RULES.md)
-- [CLAUDE.md](CLAUDE.md)
+- Server entry: [main.py](main.py)
+- Inference engine: [Python.class Engine](main.py:231)
+- Multimodal parsing: [Python.function build_mm_messages](main.py:251), [Python.function load_image_from_any](main.py:108), [Python.function load_video_frames_from_any](main.py:150)
+- Endpoints: Health [Python.app.get()](main.py:577), Chat Completions [Python.app.post()](main.py:591), Cancel [Python.app.post()](main.py:792)
+- Streaming + resume: [Python.class _SSESession](main.py:435), [Python.class _SessionStore](main.py:449), [Python.class _SQLiteStore](main.py:482), [Python.function chat_completions](main.py:591)
+- Local run (uvicorn): [Python.main()](main.py:807)
+- Configuration template: [.env.example](.env.example)
+- Dependencies: [requirements.txt](requirements.txt)
+
+Model target (default)
+- Hugging Face: Qwen/Qwen3-VL-2B-Thinking (Transformers, multimodal)
+- Overridable via environment variable: MODEL_REPO_ID
 
 ## Overview
 
-The server exposes an OpenAI-compatible endpoint for chat completions and manages local model assets using a simple, reproducible pipeline:
-1) Download model artifacts from Hugging Face into ./models
-2) Attempt to convert those artifacts into a llama.cpp-compatible GGUF file
-3) Load the GGUF at runtime using node-llama-cpp and serve inference
+The server exposes an OpenAI-compatible endpoint for chat completions that supports:
+- Text-only prompts
+- Images (URL or base64)
+- Videos (URL or base64; frames sampled)
 
-Configuration is fully environment-driven via .env. Swapping models does not require code changes: update .env, run setup (if needed), and restart.
+Two response modes are implemented:
+- Non-streaming JSON
+- Streaming via Server-Sent Events (SSE) with resumable delivery using Last-Event-ID. Resumability is achieved with an in‑memory ring buffer and optional SQLite persistence.
 
 ## Components
 
-- Server (Express)
-  - Entry point: [index.js](index.js)
-  - Endpoints:
-    - Health: [JavaScript.app.get()](index.js:79)
-    - OpenAI chat completions (non-stream): [JavaScript.app.post()](index.js:90)
-- Inference runtime
-  - node-llama-cpp bindings to llama.cpp
-  - Model/context/session singletons lazily initialized in [JavaScript.initModel()](index.js:42)
-- Model lifecycle scripts
-  - Downloader: [JavaScript.require()](scripts/download-model.js:22) (HTTP download via Hugging Face API)
-  - Converter (attempt): [JavaScript.require()](scripts/convert-model.js:24) (llama.cpp convert-hf-to-gguf.py)
-  - Orchestrator: [JavaScript.require()](scripts/setup-model.js:23) (idempotent sequence)
-  - Postinstall checks: [JavaScript.require()](scripts/postinstall-checks.js:12)
-- Documentation and rules
-  - Operator docs: [README.md](README.md)
-  - Architecture (this file): [ARCHITECTURE.md](ARCHITECTURE.md)
-  - Developer log/decisions: [CLAUDE.md](CLAUDE.md)
-  - Binding rules/process: [RULES.md](RULES.md)
+1) FastAPI application
+- Instantiated in [Python.main module](main.py:541) and endpoints mounted at:
+  - Health: [Python.app.get()](main.py:577)
+  - Chat Completions (non-stream + SSE): [Python.app.post()](main.py:591)
+  - Manual cancel (custom): [Python.app.post()](main.py:792)
+- CORS is enabled for simplicity.
 
-## Configuration (.env-driven)
+2) Inference Engine (Transformers)
+- Class: [Python.class Engine](main.py:231)
+- Loads:
+  - Processor: AutoProcessor(trust_remote_code=True)
+  - Model: AutoModelForCausalLM (device_map, dtype configurable via env)
+- Core methods:
+  - Input building: [Python.function build_mm_messages](main.py:251)
+  - Text-only generate: [Python.function infer](main.py:326)
+  - Streaming generate (iterator): [Python.function infer_stream](main.py:375)
 
-All key behaviors are controlled via .env (see [`.env.example`](.env.example)):
-- Server
-  - PORT (default 3000)
-- Model selection (swappable)
-  - MODEL_REPO_ID (e.g., Qwen/Qwen3-VL-2B-Thinking-FP8)
-  - MODELS_DIR (default ./models)
-  - OUT_GGUF_NAME (default model.gguf)
-  - MODEL_GGUF_PATH (optional absolute override)
-- Inference parameters
-  - CTX_SIZE, MAX_TOKENS, TEMPERATURE
-- Download/convert options
-  - HF_TOKEN, DOWNLOAD_CONCURRENCY, HF_FILE_PATTERNS
-  - PYTHON_EXE, LLAMACPP_DIR, LLAMACPP_CONVERTER, CONVERT_ARGS
+3) Multimodal preprocessing
+- Images:
+  - URL (http/https), data URL, base64, or local path
+  - Loader: [Python.function load_image_from_any](main.py:108)
+- Videos:
+  - URL (downloaded to temp), base64 to temp file, or local path
+  - Frame extraction via imageio.v3 (preferred) or OpenCV fallback
+  - Uniform sampling up to MAX_VIDEO_FRAMES
+  - Loader: [Python.function load_video_frames_from_any](main.py:150)
 
-Swapping models
-1) Edit .env (MODEL_REPO_ID and/or MODEL_GGUF_PATH)
-2) Run setup if you need to download/convert: npm run setup-model
-3) Restart the server
+4) SSE streaming with resume
+- Session objects:
+  - [Python.class _SSESession](main.py:435): ring buffer, condition variable, producer thread reference, cancellation event, listener count, and disconnect timer
+  - [Python.class _SessionStore](main.py:449): in-memory map with TTL + GC
+  - Optional persistence: [Python.class _SQLiteStore](main.py:482) for replaying chunks across restarts
+- SSE id format: "session_id:index"
+- Resume:
+  - Client sends Last-Event-ID header (or query ?last_event_id=...) and the same session_id in the body
+  - Server replays cached/persisted chunks after the provided index, then continues live streaming
+- Producer:
+  - Created on demand per session; runs generation in a daemon thread and pushes chunks into the ring buffer and SQLite (if enabled)
+  - See producer closure inside [Python.function chat_completions](main.py:591)
+- Auto-cancel on disconnect:
+  - If all clients disconnect for CANCEL_AFTER_DISCONNECT_SECONDS (default 3600s), a timer signals cancellation via a stopping criteria in [Python.function infer_stream](main.py:375)
 
-## Model lifecycle: Download → Convert → Serve
+## Request flow
 
-1) Download from Hugging Face
-   - Command: npm run download-model
-   - Script: [JavaScript.require()](scripts/download-model.js:22)
-   - Uses Hugging Face model list API to enumerate files; downloads selected files to ./models/<org>/<repo> with basic resume/skip-by-size.
+Non-streaming (POST /v1/chat/completions)
+1. Validate input, load engine singleton via [Python.function get_engine](main.py:558)
+2. Convert OpenAI-style messages to Qwen chat template via [Python.function build_mm_messages](main.py:251) and apply_chat_template
+3. Preprocess images/videos into processor inputs
+4. Generate with [Python.function infer](main.py:326)
+5. Return OpenAI-compatible response (choices[0].message.content)
 
-2) Convert to GGUF (attempt)
-   - Command: npm run convert-model
-   - Script: [JavaScript.require()](scripts/convert-model.js:24)
-   - Acquires llama.cpp’s convert-hf-to-gguf.py (auto-clone if needed)
-   - Detects unsupported formats (e.g., TensorFlow SavedModel for VLM) and fails fast with guidance
+Streaming (POST /v1/chat/completions with "stream": true)
+1. Determine session_id:
+   - Use body.session_id if provided; otherwise generated server-side
+2. Parse Last-Event-ID (or query ?last_event_id) to get last delivered index
+3. Create/start or reuse producer thread for this session
+4. StreamingResponse generator:
+   - Replays persisted events (SQLite, if enabled) and in-memory buffer after last index
+   - Waits on condition variable for new tokens
+   - Emits "[DONE]" at the end or upon buffer completion
+5. Clients can reconnect and resume by sending Last-Event-ID: "session_id:index"
+6. If all clients disconnect, an auto-cancel timer can stop generation (configurable via env)
 
-3) Orchestrate (idempotent)
-   - Command: npm run setup-model
-   - Script: [JavaScript.require()](scripts/setup-model.js:23)
-   - Skips work if GGUF already exists at the target location
+Manual cancel (POST /v1/cancel/{session_id})
+- Custom operational shortcut to cancel an in-flight generation for a session id.
+- This is not part of the legacy OpenAI Chat Completions spec (OpenAI’s newer Responses API defines cancel); it is provided for practical control.
 
-4) Serve
-   - Command: npm start
-   - Server: [JavaScript.app.listen()](index.js:165)
-   - On boot, the server attempts to initialize the model via [JavaScript.initModel()](index.js:42)
-   - If GGUF is missing, inference returns 503 with guidance; health endpoint remains available
+## Message and content mapping
 
-Note about VLM conversion
-- The default model Qwen/Qwen3-VL-2B-Thinking-FP8 is a TF FP8 vision-language model; llama.cpp GGUF conversion primarily targets text LLMs (Transformers/PyTorch). The converter detects TF SavedModel artifacts and fails fast with alternatives (use supported text models or prebuilt GGUF and set MODEL_GGUF_PATH).
+Input format (OpenAI-like):
+- "messages" list of role/content entries
+- content can be:
+  - string (text)
+  - array of parts with "type":
+    - "text": { text: "..."}
+    - "image_url": { image_url: { url: "..." } } or { image_url: "..." }
+    - "input_image": { b64_json: "..." } or { image: "..." }
+    - "video_url": { video_url: { url: "..." } } or { video_url: "..." }
+    - "input_video": { b64_json: "..." } or { video: "..." }
 
-## Request flow (OpenAI-compatible)
+Conversion:
+- [Python.function build_mm_messages](main.py:251) constructs a multimodal content list per message:
+  - { type: "text", text: ... }
+  - { type: "image", image: PIL.Image }
+  - { type: "video", video: [PIL.Image frames] }
 
-1) Client sends POST /v1/chat/completions to [JavaScript.app.post()](index.js:90)
-2) Server validates input and synthesizes a simple prompt from messages
-3) node-llama-cpp session runs prompt with configured sampling params
-4) Server returns a non-streaming response conforming to OpenAI’s shape (choices[0].message.content)
+Template:
+- Qwen apply_chat_template:
+  - See usage in [Python.function infer](main.py:326) and [Python.function infer_stream](main.py:375)
 
-Readiness and observability
-- Health: [JavaScript.app.get()](index.js:79) returns modelReady along with modelPath and optional error
-- Logs: server prints model initialization and path; structured logging and redaction are planned (see TODO)
+## Configuration (.env)
 
-## Error handling
+See [.env.example](.env.example)
+- PORT (default 3000)
+- MODEL_REPO_ID (default "Qwen/Qwen3-VL-2B-Thinking")
+- HF_TOKEN (optional)
+- MAX_TOKENS (default 256)
+- TEMPERATURE (default 0.7)
+- MAX_VIDEO_FRAMES (default 16)
+- DEVICE_MAP (default "auto")
+- TORCH_DTYPE (default "auto")
+- PERSIST_SESSIONS (default 0; set 1 to enable SQLite persistence)
+- SESSIONS_DB_PATH (default sessions.db)
+- SESSIONS_TTL_SECONDS (default 600)
+- CANCEL_AFTER_DISCONNECT_SECONDS (default 3600; set 0 to disable)
 
-Current
-- Missing model GGUF: returns 503 with actionable guidance (run setup-model or set MODEL_GGUF_PATH)
-- Conversion unsupported: scripts fail fast and print alternatives
+## Error handling and readiness
 
-Planned (see [TODO.md](TODO.md))
-- Structured logs with redaction
-- Timeouts and better error categories
-- Basic request/response tracing
+- Health endpoint: [Python.app.get()](main.py:577)
+  - Returns { ok, modelReady, modelId, error }
+- Chat endpoint:
+  - 400 for invalid messages or multimodal parsing errors
+  - 503 when model failed to load
+  - 500 for unexpected generation errors
+- During first request, the model is lazily loaded; subsequent requests reuse the singleton
 
-## Extensibility
+## Performance and scaling
 
-- Swap models via .env without code changes
-- Pluggable download filters (HF_FILE_PATTERNS)
-- Conversion parameters via CONVERT_ARGS
-- MODEL_GGUF_PATH override to use prebuilt GGUFs directly
+- GPU recommended:
+  - Set DEVICE_MAP=auto and TORCH_DTYPE=bfloat16/float16 if supported
+- Reduce MAX_VIDEO_FRAMES to speed up video processing
+- For concurrency:
+  - FastAPI/Uvicorn workers and model sharing: typically 1 model per process
+  - For high throughput, prefer multiple processes or a queueing layer
 
 ## Data and directories
 
-- ./models: local model cache (ignored by git)
-- node_modules: dependencies (ignored by git)
-- No large artifacts are committed; all binaries are downloaded/generated locally per [RULES.md](RULES.md)
+- models/ contains downloaded model artifacts (implicitly created by Transformers cache); ignored by git
+- tmp/ used transiently for video decoding (temporary files)
 
-## Compliance notes
+Ignored artifacts (see [.gitignore](.gitignore))
+- Python: .venv/, __pycache__/, .cache/, etc.
+- Large artifacts: models/, data/, uploads/, tmp/
 
-- All changes must be documented (see [RULES.md](RULES.md))
-- Always commit and push after meaningful progress
-- Keep [ARCHITECTURE.md](ARCHITECTURE.md) authoritative for flows; update when code/data paths change
+## Streaming resume details
+
+- Session store:
+  - In-memory ring buffer for fast replay
+  - Optional SQLite persistence for robust replay across process restarts
+  - See GC in [Python.class _SessionStore](main.py:449) and [Python.method _SQLiteStore.gc](main.py:526)
+- Limits:
+  - Ring buffer stores ~2048 SSE events per session by default
+  - If the buffer overflows before a client resumes and persistence is disabled, the earliest chunks may be unavailable
+- End-of-stream:
+  - Final chunk contains finish_reason: "stop"
+  - "[DONE]" sentinel is emitted afterwards
+
+## Future enhancements
+
+- Redis persistence:
+  - Add a Redis-backed store as a drop-in alongside SQLite
+- Token accounting:
+  - Populate usage prompt/completion/total tokens when model exposes tokenization costs
+- Logging/observability:
+  - Structured logs, request IDs, and metrics
+
+## Migration notes (from Node.js)
+
+- All Node.js server files and scripts were removed (index.js, package*.json, scripts/)
+- The server now targets Transformers models directly and supports multimodal inputs out of the box
+- The API remains OpenAI-compatible on /v1/chat/completions with resumable SSE and optional SQLite persistence

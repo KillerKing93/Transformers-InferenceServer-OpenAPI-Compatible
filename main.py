@@ -1,0 +1,810 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+FastAPI Inference Server (OpenAI-compatible) for Qwen3-VL multimodal model.
+
+- Default model: Qwen/Qwen3-VL-2B-Thinking (as requested)
+- Endpoints:
+  * GET /health
+  * POST /v1/chat/completions  (non-streaming)
+
+Notes:
+- This server relies on Hugging Face Transformers with trust_remote_code=True.
+- Images and videos in OpenAI-style messages are supported via:
+  - content string
+  - content array with parts of type: "text" | "image_url" | "input_image" | "video_url" | "input_video"
+    * image_url: { "url": "http(s)://..." } or data URL (base64)
+    * input_image: { "b64_json": "<base64>" }
+    * video_url: { "url": "http(s)://..." } or local path
+    * input_video: { "b64_json": "<base64 of an entire video file>" }  (decoded to temp file)
+- For videos, this implementation samples a limited number of frames for efficiency.
+
+Environment (.env supported via python-dotenv):
+- PORT: int (default 3000)
+- MODEL_REPO_ID: str (default "Qwen/Qwen3-VL-2B-Thinking")
+- HF_TOKEN: str (optional, for gated/private repos)
+- MAX_TOKENS: int (default 256)
+- TEMPERATURE: float (default 0.7)
+- MAX_VIDEO_FRAMES: int (default 16)
+- DEVICE_MAP: str (default "auto")
+- TORCH_DTYPE: str (default "auto")  # e.g., "float16", "bfloat16", "auto"
+"""
+
+import os
+import io
+import re
+import base64
+import tempfile
+import contextlib
+from typing import Any, Dict, List, Optional, Tuple
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from starlette.responses import JSONResponse
+from fastapi.responses import StreamingResponse
+import json
+import threading
+import time
+import uuid
+import sqlite3
+from collections import deque
+from typing import Deque, Tuple
+
+# Load env
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+# Optional heavy deps are imported lazily inside Engine to improve startup UX
+import requests
+from PIL import Image
+import numpy as np
+
+# Server config
+PORT = int(os.getenv("PORT", "3000"))
+DEFAULT_MODEL_ID = os.getenv("MODEL_REPO_ID", "Qwen/Qwen3-VL-2B-Thinking")
+HF_TOKEN = os.getenv("HF_TOKEN", "").strip() or None
+DEFAULT_MAX_TOKENS = int(os.getenv("MAX_TOKENS", "256"))
+DEFAULT_TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
+MAX_VIDEO_FRAMES = int(os.getenv("MAX_VIDEO_FRAMES", "16"))
+DEVICE_MAP = os.getenv("DEVICE_MAP", "auto")
+TORCH_DTYPE = os.getenv("TORCH_DTYPE", "auto")
+
+# Optional persistent session store (SQLite)
+PERSIST_SESSIONS = str(os.getenv("PERSIST_SESSIONS", "0")).lower() in ("1", "true", "yes", "y")
+SESSIONS_DB_PATH = os.getenv("SESSIONS_DB_PATH", "sessions.db")
+SESSIONS_TTL_SECONDS = int(os.getenv("SESSIONS_TTL_SECONDS", "600"))
+# Optional auto-cancel generation if all clients disconnect for a duration (seconds)
+# Default: 1 hour (3600s). Set to 0 to disable auto-cancel-on-disconnect.
+CANCEL_AFTER_DISCONNECT_SECONDS = int(os.getenv("CANCEL_AFTER_DISCONNECT_SECONDS", "3600"))
+
+
+def is_data_url(url: str) -> bool:
+    return url.startswith("data:") and ";base64," in url
+
+
+def is_http_url(url: str) -> bool:
+    return url.startswith("http://") or url.startswith("https://")
+
+
+def decode_base64_to_bytes(b64: str) -> bytes:
+    # strip possible "data:*;base64," prefix
+    if "base64," in b64:
+        b64 = b64.split("base64,", 1)[1]
+    return base64.b64decode(b64, validate=False)
+
+
+def fetch_bytes(url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 60) -> bytes:
+    if not is_http_url(url):
+        raise ValueError(f"Only http(s) URLs supported for fetch, got: {url}")
+    resp = requests.get(url, headers=headers or {}, timeout=timeout, stream=True)
+    resp.raise_for_status()
+    return resp.content
+
+
+def load_image_from_any(src: Dict[str, Any]) -> Image.Image:
+    """
+    src can be:
+      - { "url": "http(s)://..." } (also supports data URL)
+      - { "b64_json": "<base64>" }
+      - { "path": "local_path" } (optional)
+    """
+    if "b64_json" in src and src["b64_json"]:
+        data = decode_base64_to_bytes(str(src["b64_json"]))
+        return Image.open(io.BytesIO(data)).convert("RGB")
+
+    if "url" in src and src["url"]:
+        url = str(src["url"])
+        if is_data_url(url):
+            data = decode_base64_to_bytes(url)
+            return Image.open(io.BytesIO(data)).convert("RGB")
+        if is_http_url(url):
+            data = fetch_bytes(url)
+            return Image.open(io.BytesIO(data)).convert("RGB")
+        # treat as local path
+        if os.path.exists(url):
+            with open(url, "rb") as f:
+                return Image.open(io.BytesIO(f.read())).convert("RGB")
+        raise ValueError(f"Invalid image url/path: {url}")
+
+    if "path" in src and src["path"]:
+        p = str(src["path"])
+        if os.path.exists(p):
+            with open(p, "rb") as f:
+                return Image.open(io.BytesIO(f.read())).convert("RGB")
+        raise ValueError(f"Image path not found: {p}")
+
+    raise ValueError("Unsupported image source payload")
+
+
+def write_bytes_tempfile(data: bytes, suffix: str) -> str:
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    with tmp as f:
+        f.write(data)
+    return tmp.name
+
+
+def load_video_frames_from_any(src: Dict[str, Any], max_frames: int = MAX_VIDEO_FRAMES) -> List[Image.Image]:
+    """
+    Returns a list of PIL.Image frames (RGB) sampled up to max_frames.
+    src can be:
+      - { "url": "http(s)://..." } (mp4/mov/webm/etc.)
+      - { "b64_json": "<base64 of a video file>" }
+      - { "path": "local_path" }
+    """
+    # Prefer imageio.v3 if present, fallback to OpenCV
+    # We load all frames then uniform sample if too many.
+    def _load_all_frames(path: str) -> List[Image.Image]:
+        frames: List[Image.Image] = []
+        with contextlib.suppress(ImportError):
+            import imageio.v3 as iio
+            arr_iter = iio.imiter(path)  # yields numpy arrays HxWxC
+            for arr in arr_iter:
+                if arr is None:
+                    continue
+                if arr.ndim == 2:
+                    # grayscale -> RGB
+                    arr = np.stack([arr, arr, arr], axis=-1)
+                if arr.shape[-1] == 4:
+                    # RGBA -> RGB
+                    arr = arr[..., :3]
+                frames.append(Image.fromarray(arr).convert("RGB"))
+            return frames
+
+        # Fallback to OpenCV
+        import cv2  # type: ignore
+        cap = cv2.VideoCapture(path)
+        ok, frame = cap.read()
+        while ok:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frames.append(Image.fromarray(frame))
+            ok, frame = cap.read()
+        cap.release()
+        return frames
+
+    # Resolve to a local path
+    local_path = None
+    if "b64_json" in src and src["b64_json"]:
+        data = decode_base64_to_bytes(str(src["b64_json"]))
+        local_path = write_bytes_tempfile(data, suffix=".mp4")
+    elif "url" in src and src["url"]:
+        url = str(src["url"])
+        if is_data_url(url):
+            data = decode_base64_to_bytes(url)
+            local_path = write_bytes_tempfile(data, suffix=".mp4")
+        elif is_http_url(url):
+            data = fetch_bytes(url)
+            local_path = write_bytes_tempfile(data, suffix=".mp4")
+        elif os.path.exists(url):
+            local_path = url
+        else:
+            raise ValueError(f"Invalid video url/path: {url}")
+    elif "path" in src and src["path"]:
+        p = str(src["path"])
+        if os.path.exists(p):
+            local_path = p
+        else:
+            raise ValueError(f"Video path not found: {p}")
+    else:
+        raise ValueError("Unsupported video source payload")
+
+    frames = _load_all_frames(local_path)
+    # Uniform sample if too many frames
+    if len(frames) > max_frames and max_frames > 0:
+        idxs = np.linspace(0, len(frames) - 1, max_frames).astype(int).tolist()
+        frames = [frames[i] for i in idxs]
+    return frames
+
+
+class ChatRequest(BaseModel):
+    model: Optional[str] = None
+    messages: List[Dict[str, Any]]
+    max_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    stream: Optional[bool] = None
+    session_id: Optional[str] = None
+
+
+class Engine:
+    def __init__(self, model_id: str, hf_token: Optional[str] = None):
+        # Lazy import heavy deps
+        from transformers import AutoProcessor, AutoModelForCausalLM
+
+        model_kwargs: Dict[str, Any] = {
+            "trust_remote_code": True,
+        }
+        if hf_token:
+            model_kwargs["token"] = hf_token
+            model_kwargs["use_auth_token"] = hf_token  # compatibility alias
+        # Device and dtype
+        model_kwargs["device_map"] = DEVICE_MAP
+        model_kwargs["torch_dtype"] = TORCH_DTYPE if TORCH_DTYPE != "auto" else "auto"
+
+        self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True, **({} if not hf_token else {"token": hf_token, "use_auth_token": hf_token}))
+        self.model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs).eval()
+
+        self.model_id = model_id
+
+    def build_mm_messages(self, openai_messages: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Image.Image], List[List[Image.Image]]]:
+        """
+        Convert OpenAI-style messages to Qwen multimodal messages.
+        Returns:
+          - messages for apply_chat_template
+          - flat list of images in encounter order
+          - list of videos (each is list of PIL frames)
+        """
+        mm_msgs: List[Dict[str, Any]] = []
+        images: List[Image.Image] = []
+        videos: List[List[Image.Image]] = []
+
+        for msg in openai_messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            parts: List[Dict[str, Any]] = []
+
+            if isinstance(content, str):
+                if content:
+                    parts.append({"type": "text", "text": content})
+            elif isinstance(content, list):
+                for p in content:
+                    ptype = p.get("type")
+                    if ptype == "text":
+                        txt = p.get("text", "")
+                        if txt:
+                            parts.append({"type": "text", "text": txt})
+                    elif ptype in ("image_url", "input_image"):
+                        # Normalize image source
+                        src = {}
+                        if ptype == "image_url":
+                            u = (p.get("image_url") or {}).get("url") if isinstance(p.get("image_url"), dict) else p.get("image_url")
+                            src["url"] = u
+                        else:
+                            # input_image with base64
+                            b64 = p.get("image") or p.get("b64_json") or p.get("data") or (p.get("image_url") or {}).get("url")
+                            if b64:
+                                src["b64_json"] = b64
+                        try:
+                            img = load_image_from_any(src)
+                            images.append(img)
+                            parts.append({"type": "image", "image": img})
+                        except Exception as e:
+                            raise ValueError(f"Failed to parse image part: {e}") from e
+                    elif ptype in ("video_url", "input_video"):
+                        src = {}
+                        if ptype == "video_url":
+                            u = (p.get("video_url") or {}).get("url") if isinstance(p.get("video_url"), dict) else p.get("video_url")
+                            src["url"] = u
+                        else:
+                            b64 = p.get("video") or p.get("b64_json") or p.get("data")
+                            if b64:
+                                src["b64_json"] = b64
+                        try:
+                            frames = load_video_frames_from_any(src, max_frames=MAX_VIDEO_FRAMES)
+                            videos.append(frames)
+                            parts.append({"type": "video", "video": frames})
+                        except Exception as e:
+                            raise ValueError(f"Failed to parse video part: {e}") from e
+                    else:
+                        # Unknown type: ignore quietly or treat as text if possible
+                        if isinstance(p, dict):
+                            txt = p.get("text")
+                            if isinstance(txt, str) and txt:
+                                parts.append({"type": "text", "text": txt})
+            else:
+                # Unrecognized content format; attempt string coerce
+                if content:
+                    parts.append({"type": "text", "text": str(content)})
+
+            mm_msgs.append({"role": role, "content": parts})
+
+        return mm_msgs, images, videos
+
+    def infer(self, messages: List[Dict[str, Any]], max_tokens: int, temperature: float) -> str:
+        from transformers import GenerationConfig
+
+        mm_messages, images, videos = self.build_mm_messages(messages)
+
+        # Build chat template
+        text = self.processor.apply_chat_template(
+            mm_messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        proc_kwargs: Dict[str, Any] = {"text": [text], "return_tensors": "pt"}
+        if images:
+            proc_kwargs["images"] = images
+        if videos:
+            proc_kwargs["videos"] = videos
+
+        inputs = self.processor(**proc_kwargs)
+        # Move tensors to model device if present
+        try:
+            device = getattr(self.model, "device", None) or next(self.model.parameters()).device
+            inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+        except Exception:
+            pass
+
+        do_sample = temperature is not None and float(temperature) > 0.0
+
+        gen_ids = self.model.generate(
+            **inputs,
+            max_new_tokens=int(max_tokens),
+            temperature=float(temperature),
+            do_sample=do_sample,
+            use_cache=True
+        )
+        # Decode
+        output = self.processor.batch_decode(
+            gen_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False
+        )[0]
+
+        # Best-effort: return only the assistant reply after the last template marker if present
+        # Many Qwen templates put "assistant" or special tokens; here we do a safe split heuristic.
+        parts = re.split(r"\n?assistant:\s*", output, flags=re.IGNORECASE)
+        if len(parts) >= 2:
+            return parts[-1].strip()
+        return output.strip()
+
+    def infer_stream(self, messages: List[Dict[str, Any]], max_tokens: int, temperature: float, cancel_event: Optional[threading.Event] = None):
+        from transformers import TextIteratorStreamer, StoppingCriteria, StoppingCriteriaList
+
+        mm_messages, images, videos = self.build_mm_messages(messages)
+
+        text = self.processor.apply_chat_template(
+            mm_messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        proc_kwargs: Dict[str, Any] = {"text": [text], "return_tensors": "pt"}
+        if images:
+            proc_kwargs["images"] = images
+        if videos:
+            proc_kwargs["videos"] = videos
+
+        inputs = self.processor(**proc_kwargs)
+        try:
+            device = getattr(self.model, "device", None) or next(self.model.parameters()).device
+            inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+        except Exception:
+            pass
+
+        do_sample = temperature is not None and float(temperature) > 0.0
+
+        streamer = TextIteratorStreamer(
+            getattr(self.processor, "tokenizer", None),
+            skip_prompt=True,
+            skip_special_tokens=True
+        )
+
+        gen_kwargs = dict(
+            **inputs,
+            max_new_tokens=int(max_tokens),
+            temperature=float(temperature),
+            do_sample=do_sample,
+            use_cache=True,
+            streamer=streamer,
+        )
+
+        # Optional cooperative cancellation via StoppingCriteria
+        if cancel_event is not None:
+            class _CancelCrit(StoppingCriteria):
+                def __init__(self, ev: threading.Event):
+                    self.ev = ev
+                def __call__(self, input_ids, scores, **kwargs):
+                    return bool(self.ev.is_set())
+            gen_kwargs["stopping_criteria"] = StoppingCriteriaList([_CancelCrit(cancel_event)])
+
+        th = threading.Thread(target=self.model.generate, kwargs=gen_kwargs)
+        th.start()
+
+        for piece in streamer:
+            if piece:
+                yield piece
+
+
+# Simple in-memory resumable SSE session store + optional SQLite persistence
+
+class _SSESession:
+    def __init__(self, maxlen: int = 2048, ttl_seconds: int = 600):
+        self.buffer: Deque[Tuple[int, str]] = deque(maxlen=maxlen)  # (idx, sse_line_block)
+        self.last_idx: int = -1
+        self.created: float = time.time()
+        self.finished: bool = False
+        self.cond = threading.Condition()
+        self.thread: Optional[threading.Thread] = None
+        self.ttl_seconds = ttl_seconds
+        # Cancellation + client tracking
+        self.cancel_event = threading.Event()
+        self.listeners: int = 0
+        self.cancel_timer = None  # type: ignore
+
+class _SessionStore:
+    def __init__(self, ttl_seconds: int = 600, max_sessions: int = 256):
+        self._sessions: Dict[str, _SSESession] = {}
+        self._lock = threading.Lock()
+        self._ttl = ttl_seconds
+        self._max_sessions = max_sessions
+
+    def get_or_create(self, sid: str) -> _SSESession:
+        with self._lock:
+            sess = self._sessions.get(sid)
+            if sess is None:
+                sess = _SSESession(ttl_seconds=self._ttl)
+                self._sessions[sid] = sess
+            return sess
+
+    def get(self, sid: str) -> Optional[_SSESession]:
+        with self._lock:
+            return self._sessions.get(sid)
+
+    def gc(self):
+        now = time.time()
+        with self._lock:
+            # remove expired
+            expired = [k for k, v in self._sessions.items() if (now - v.created) > self._ttl or (v.finished and (now - v.created) > self._ttl / 4)]
+            for k in expired:
+                self._sessions.pop(k, None)
+            # bound session count
+            if len(self._sessions) > self._max_sessions:
+                # drop oldest
+                for k, _ in sorted(self._sessions.items(), key=lambda kv: kv[1].created)[: max(0, len(self._sessions) - self._max_sessions)]:
+                    self._sessions.pop(k, None)
+
+class _SQLiteStore:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self._conn.execute("PRAGMA journal_mode=WAL;")
+        self._conn.execute("PRAGMA synchronous=NORMAL;")
+        self._ensure_schema()
+
+    def _ensure_schema(self):
+        cur = self._conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, created REAL, finished INTEGER DEFAULT 0)")
+        cur.execute("CREATE TABLE IF NOT EXISTS events (session_id TEXT, idx INTEGER, data TEXT, created REAL, PRIMARY KEY(session_id, idx))")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, idx)")
+        self._conn.commit()
+
+    def ensure_session(self, session_id: str, created: int):
+        with self._lock:
+            self._conn.execute("INSERT OR IGNORE INTO sessions(session_id, created, finished) VALUES (?, ?, 0)", (session_id, float(created)))
+            self._conn.commit()
+
+    def append_event(self, session_id: str, idx: int, payload: Dict[str, Any]):
+        data = json.dumps(payload, ensure_ascii=False)
+        with self._lock:
+            self._conn.execute("INSERT OR REPLACE INTO events(session_id, idx, data, created) VALUES (?, ?, ?, ?)", (session_id, idx, data, time.time()))
+            self._conn.commit()
+
+    def get_events_after(self, session_id: str, last_idx: int) -> List[Tuple[int, str]]:
+        with self._lock:
+            cur = self._conn.execute("SELECT idx, data FROM events WHERE session_id=? AND idx>? ORDER BY idx ASC", (session_id, last_idx))
+            return [(int(r[0]), str(r[1])) for r in cur.fetchall()]
+
+    def mark_finished(self, session_id: str):
+        with self._lock:
+            self._conn.execute("UPDATE sessions SET finished=1 WHERE session_id=?", (session_id,))
+            self._conn.commit()
+
+    def session_meta(self, session_id: str) -> Tuple[bool, int]:
+        with self._lock:
+            row = self._conn.execute("SELECT finished FROM sessions WHERE session_id=?", (session_id,)).fetchone()
+            finished = bool(row[0]) if row else False
+            row2 = self._conn.execute("SELECT MAX(idx) FROM events WHERE session_id=?", (session_id,)).fetchone()
+            last_idx = int(row2[0]) if row2 and row2[0] is not None else -1
+            return finished, last_idx
+
+    def gc(self, ttl_seconds: int):
+        cutoff = time.time() - float(ttl_seconds)
+        with self._lock:
+            # delete finished sessions older than cutoff
+            cur = self._conn.execute("SELECT session_id FROM sessions WHERE finished=1 AND created<?", (cutoff,))
+            ids = [r[0] for r in cur.fetchall()]
+            for sid in ids:
+                self._conn.execute("DELETE FROM events WHERE session_id=?", (sid,))
+                self._conn.execute("DELETE FROM sessions WHERE session_id=?", (sid,))
+            self._conn.commit()
+
+def _sse_event(session_id: str, idx: int, payload: Dict[str, Any]) -> str:
+    # Include SSE id line so clients can send Last-Event-ID to resume.
+    return f"id: {session_id}:{idx}\n" + f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+_STORE = _SessionStore()
+_DB_STORE = _SQLiteStore(SESSIONS_DB_PATH) if PERSIST_SESSIONS else None
+
+# Instantiate FastAPI and engine singleton
+app = FastAPI(title="Qwen3-VL Inference Server", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+_engine: Optional[Engine] = None
+_engine_error: Optional[str] = None
+
+
+def get_engine() -> Engine:
+    global _engine, _engine_error
+    if _engine is not None:
+        return _engine
+    try:
+        model_id = DEFAULT_MODEL_ID
+        _engine = Engine(model_id=model_id, hf_token=HF_TOKEN)
+        _engine_error = None
+        return _engine
+    except Exception as e:
+        _engine_error = f"{type(e).__name__}: {e}"
+        raise
+
+
+@app.get("/")
+def root():
+    return JSONResponse({"ok": True})
+
+
+@app.get("/health")
+def health():
+    ready = False
+    err = None
+    model_id = DEFAULT_MODEL_ID
+    global _engine, _engine_error
+    if _engine is not None:
+        ready = True
+        model_id = _engine.model_id
+    elif _engine_error:
+        err = _engine_error
+    return JSONResponse({"ok": True, "modelReady": ready, "modelId": model_id, "error": err})
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(request: Request, body: ChatRequest):
+    # Ensure engine is loaded
+    try:
+        engine = get_engine()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Model not ready: {e}")
+
+    if not body or not isinstance(body.messages, list) or len(body.messages) == 0:
+        raise HTTPException(status_code=400, detail="messages must be a non-empty array")
+
+    max_tokens = int(body.max_tokens) if isinstance(body.max_tokens, int) else DEFAULT_MAX_TOKENS
+    temperature = float(body.temperature) if body.temperature is not None else DEFAULT_TEMPERATURE
+    stream = bool(body.stream)
+
+    if stream:
+        created = int(time.time())
+        model_id = engine.model_id
+
+        # Session handling
+        session_id = (body.session_id or "").strip() or uuid.uuid4().hex
+        # Parse Last-Event-ID from header or query to resume
+        last_event_raw = request.headers.get("last-event-id") or request.query_params.get("last_event_id") or ""
+        last_idx = -1
+        try:
+            if last_event_raw:
+                last_idx = int(last_event_raw.split(":")[-1])
+        except Exception:
+            last_idx = -1
+
+        sess = _STORE.get_or_create(session_id)
+
+        # Ensure persistent session exists if enabled
+        if _DB_STORE:
+            _DB_STORE.ensure_session(session_id, created)
+
+        # Start producer if not running
+        with sess.cond:
+            if sess.thread is None or not sess.thread.is_alive():
+                def producer():
+                    idx = -1
+
+                    def push(payload: Dict[str, Any]):
+                        nonlocal idx
+                        with sess.cond:
+                            idx += 1
+                            ev = _sse_event(session_id, idx, payload)
+                            sess.buffer.append((idx, ev))
+                            sess.last_idx = idx
+                            if _DB_STORE:
+                                _DB_STORE.append_event(session_id, idx, payload)
+                            sess.cond.notify_all()
+
+                    # initial assistant role delta (OpenAI style)
+                    push({
+                        "id": session_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_id,
+                        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                    })
+
+                    try:
+                        for piece in engine.infer_stream(body.messages, max_tokens=max_tokens, temperature=temperature, cancel_event=sess.cancel_event):
+                            if not isinstance(piece, str) or piece == "":
+                                continue
+                            push({
+                                "id": session_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model_id,
+                                "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}],
+                            })
+                        # finish
+                        push({
+                            "id": session_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": model_id,
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        })
+                    except Exception as e:
+                        push({"error": f"{type(e).__name__}: {e}"})
+                    finally:
+                        with sess.cond:
+                            sess.finished = True
+                            if _DB_STORE:
+                                _DB_STORE.mark_finished(session_id)
+                            sess.cond.notify_all()
+
+                sess.thread = threading.Thread(target=producer, daemon=True)
+                sess.thread.start()
+
+        def stream_gen():
+            # Replay cached events after last_idx, then stream new ones
+            next_idx = last_idx + 1
+            while True:
+                to_send: list[Tuple[int, str]] = []
+
+                # 1) Pull from SQLite (persistent) if enabled
+                if _DB_STORE:
+                    db_events = _DB_STORE.get_events_after(session_id, next_idx - 1)
+                    for didx, data_json in db_events:
+                        if didx >= next_idx:
+                            ev = f"id: {session_id}:{didx}\n" + f"data: {data_json}\n\n"
+                            to_send.append((didx, ev))
+                    if to_send:
+                        next_idx = to_send[-1][0] + 1
+
+                # 2) Pull from in-memory buffer for any newer events
+                with sess.cond:
+                    mem_events: list[Tuple[int, str]] = []
+                    for midx, ev in list(sess.buffer):
+                        if midx >= next_idx:
+                            mem_events.append((midx, ev))
+                    if mem_events:
+                        to_send.extend(mem_events)
+                        to_send.sort(key=lambda x: x[0])
+                        next_idx = to_send[-1][0] + 1
+                    else:
+                        # Determine finish state across memory and DB
+                        finished_flag = sess.finished
+                        if _DB_STORE and not finished_flag:
+                            fdb, last_db_idx = _DB_STORE.session_meta(session_id)
+                            finished_flag = fdb and next_idx > last_db_idx
+                        if finished_flag:
+                            break
+                        sess.cond.wait(timeout=1.0)
+                        continue
+
+                for _, ev in to_send:
+                    yield ev
+
+            # end marker
+            yield "data: [DONE]\n\n"
+
+        # Periodic garbage collection
+        _STORE.gc()
+        if _DB_STORE:
+            _DB_STORE.gc(SESSIONS_TTL_SECONDS)
+
+        # Wrap generator to manage listener count and auto-cancel timer
+        def gen_with_lifecycle():
+            with sess.cond:
+                sess.listeners += 1
+                # cancel any pending auto-cancel when a client connects
+                if getattr(sess, "cancel_timer", None):
+                    try:
+                        sess.cancel_timer.cancel()
+                    except Exception:
+                        pass
+                    sess.cancel_timer = None
+            try:
+                for ev in stream_gen():
+                    yield ev
+            finally:
+                with sess.cond:
+                    sess.listeners = max(0, sess.listeners - 1)
+                    # if no more listeners and not finished, schedule auto-cancel
+                    if sess.listeners == 0 and not sess.finished and CANCEL_AFTER_DISCONNECT_SECONDS > 0:
+                        def _timeout_cancel():
+                            with sess.cond:
+                                if not sess.finished:
+                                    sess.cancel_event.set()
+                                    sess.cond.notify_all()
+                        sess.cancel_timer = threading.Timer(CANCEL_AFTER_DISCONNECT_SECONDS, _timeout_cancel)
+                        sess.cancel_timer.daemon = True
+                        sess.cancel_timer.start()
+
+        return StreamingResponse(gen_with_lifecycle(), media_type="text/event-stream")
+
+    # Non-streaming path
+    try:
+        output = engine.infer(body.messages, max_tokens=max_tokens, temperature=temperature)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Inference error: {e}")
+
+    import time, random
+    now = int(time.time())
+    resp = {
+        "id": f"chatcmpl-{now}-{random.randint(100000, 999999)}",
+        "object": "chat.completion",
+        "created": now,
+        "model": engine.model_id,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": output},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+    return JSONResponse(resp)
+ 
+@app.post("/v1/cancel/{session_id}")
+def cancel_session(session_id: str):
+    sid = (session_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    sess = _STORE.get(sid)
+    if sess:
+        with sess.cond:
+            sess.cancel_event.set()
+            sess.cond.notify_all()
+    # Mark finished in DB to prevent new clients from waiting indefinitely
+    if _DB_STORE:
+        _DB_STORE.mark_finished(sid)
+    return JSONResponse({"ok": True, "session_id": sid})
+ 
+if __name__ == "__main__":
+    # Local dev runner (uvicorn)
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=False)

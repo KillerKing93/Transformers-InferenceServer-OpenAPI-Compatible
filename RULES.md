@@ -44,6 +44,25 @@ Never skip documentation. If a change is reverted, document the revert.
   - Reference important files in the commit body, for example: updated [Python.function chat_completions()](main.py:591), [README.md](README.md).
 - After updating code or docs, commit immediately. Do not batch unrelated changes.
 
+## 2.1) Progress log (mandatory)
+
+- Every commit MUST include a corresponding entry in [CLAUDE.md](CLAUDE.md) under a “Progress Log” section.
+- Each entry must include:
+  - Date/time (Asia/Jakarta)
+  - Scope and short summary of the change
+  - The final Git commit hash and commit message
+  - Files and exact callable anchors touched (use clickable anchors), e.g. [Python.function chat_completions()](main.py:591), [README.md](README.md:1), [ARCHITECTURE.md](ARCHITECTURE.md:1)
+  - Verification steps and results (curl examples, expected vs actual, notes)
+- Required sequence:
+  1) Make code changes
+  2) Update docs: [README.md](README.md), [ARCHITECTURE.md](ARCHITECTURE.md), [TODO.md](TODO.md), and add a new progress log entry in [CLAUDE.md](CLAUDE.md)
+  3) Run Git commands:
+     - git add .
+     - git commit -m "type(scope): short description"
+     - git push
+  4) Append the final commit hash to the [CLAUDE.md](CLAUDE.md) entry if it was not known at authoring time
+- No code change may land without a synchronized progress log entry.
+
 ## 3) Large artifacts policy (.gitignore)
 
 Never commit large/generated artifacts. Keep the repository lean and reproducible.

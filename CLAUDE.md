@@ -166,3 +166,94 @@ Verification checklist
 - Auto-cancel fires after all clients disconnect for CANCEL_AFTER_DISCONNECT_SECONDS and cooperatively stops generation.
 
 End of entry.
+## Progress Log Template (Mandatory per RULES)
+
+Use this template for every change or progress step. Add a new entry before/with each commit, then append the final commit hash after push. See enforcement in [RULES.md](RULES.md:33) and the progress policy in [RULES.md](RULES.md:49).
+
+Entry template
+- Date/Time (Asia/Jakarta): YYYY-MM-DD HH:mm
+- Commit: &lt;hash&gt; - &lt;conventional message&gt;
+- Scope/Files (clickable anchors required):
+  - [Python.function chat_completions()](main.py:591)
+  - [Python.function infer_stream()](main.py:375)
+  - [README.md](README.md:1), [ARCHITECTURE.md](ARCHITECTURE.md:1), [RULES.md](RULES.md:1), [TODO.md](TODO.md:1)
+- Summary:
+  - What changed and why (problem/requirement)
+- Changes:
+  - Short bullet list of code edits with anchors
+- Verification:
+  - Commands:
+    - curl examples (non-stream, stream with session_id, resume with Last-Event-ID)
+    - cancel API test: curl -X POST http://localhost:3000/v1/cancel/mysession123
+  - Expected vs Actual:
+    - …
+- Follow-ups/Limitations:
+  - …
+- Notes:
+  - If commit hash unknown at authoring time, update the entry after git push.
+
+Git sequence (run every time)
+- git add .
+- git commit -m "type(scope): short description"
+- git push
+- Update this entry with the final commit hash.
+
+Example (filled)
+- Date/Time: 2025-10-23 14:30 (Asia/Jakarta)
+- Commit: f724450 - feat(stream): add SQLite persistence for SSE resume
+- Scope/Files:
+  - [Python.class _SQLiteStore](main.py:482)
+  - [Python.function chat_completions()](main.py:591)
+  - [README.md](README.md:1), [ARCHITECTURE.md](ARCHITECTURE.md:1)
+- Summary:
+  - Persist SSE chunks to SQLite for replay across restarts; enable via PERSIST_SESSIONS.
+- Changes:
+  - Add _SQLiteStore with schema and CRUD
+  - Wire producer to append events to DB
+  - Replay DB events on resume before in-memory buffer
+- Verification:
+  - curl -N -H "Content-Type: application/json" ^
+    -d "{\"session_id\":\"mysession123\",\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
+    http://localhost:3000/v1/chat/completions
+  - Restart server; resume:
+    curl -N -H "Content-Type: application/json" ^
+    -H "Last-Event-ID: mysession123:42" ^
+    -d "{\"session_id\":\"mysession123\",\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
+    http://localhost:3000/v1/chat/completions
+  - Expected vs Actual: replayed chunks after index 42, continued live, ended with [DONE].
+- Follow-ups:
+  - Consider Redis store for multi-process coordination
+## Progress Log — 2025-10-23 14:31 (Asia/Jakarta)
+
+- Commit: f724450 - docs: sync README/ARCHITECTURE/RULES with main.py; add progress log in CLAUDE.md; enforce mandatory Git
+- Scope/Files (anchors):
+  - [Python.function chat_completions()](main.py:591)
+  - [Python.function infer_stream()](main.py:375)
+  - [Python.class _SSESession](main.py:435), [Python.class _SessionStore](main.py:449), [Python.class _SQLiteStore](main.py:482)
+  - [README.md](README.md:1), [ARCHITECTURE.md](ARCHITECTURE.md:1), [RULES.md](RULES.md:1), [CLAUDE.md](CLAUDE.md:1), [.env.example](.env.example:1)
+- Summary:
+  - Completed Python migration and synchronized documentation. Implemented SSE streaming with resume, optional SQLite persistence, auto-cancel on disconnect, and manual cancel API. RULES now mandate Git usage and progress logging.
+- Changes:
+  - Document streaming/resume/persistence/cancel in [README.md](README.md:1) and [ARCHITECTURE.md](ARCHITECTURE.md:1)
+  - Enforce Git workflow and progress logging in [RULES.md](RULES.md:33)
+  - Add Progress Log template and entries in [CLAUDE.md](CLAUDE.md:1)
+- Verification:
+  - Non-stream:
+    curl -X POST http://localhost:3000/v1/chat/completions ^
+      -H "Content-Type: application/json" ^
+      -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
+  - Stream:
+    curl -N -H "Content-Type: application/json" ^
+      -d "{\"session_id\":\"mysession123\",\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
+      http://localhost:3000/v1/chat/completions
+  - Resume:
+    curl -N -H "Content-Type: application/json" ^
+      -H "Last-Event-ID: mysession123:42" ^
+      -d "{\"session_id\":\"mysession123\",\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
+      http://localhost:3000/v1/chat/completions
+  - Cancel:
+    curl -X POST http://localhost:3000/v1/cancel/mysession123
+  - Results:
+    - Streaming emits chunks, ends with [DONE]; resume replays after index; cancel terminates generation; auto-cancel after disconnect threshold works via timer + stopping criteria.
+- Follow-ups:
+  - Optional Redis store for multi-process coordination.

@@ -81,6 +81,12 @@ SESSIONS_TTL_SECONDS = int(os.getenv("SESSIONS_TTL_SECONDS", "600"))
 # Default: 1 hour (3600s). Set to 0 to disable auto-cancel-on-disconnect.
 CANCEL_AFTER_DISCONNECT_SECONDS = int(os.getenv("CANCEL_AFTER_DISCONNECT_SECONDS", "3600"))
 
+# Auto compression settings (prompt context control)
+ENABLE_AUTO_COMPRESSION = str(os.getenv("ENABLE_AUTO_COMPRESSION", "1")).lower() in ("1","true","yes","y")
+CONTEXT_MAX_TOKENS_AUTO = int(os.getenv("CONTEXT_MAX_TOKENS_AUTO", "0"))  # 0 => use tokenizer/model default
+CONTEXT_SAFETY_MARGIN = int(os.getenv("CONTEXT_SAFETY_MARGIN", "256"))
+COMPRESSION_STRATEGY = os.getenv("COMPRESSION_STRATEGY", "truncate")  # truncate | summarize (truncate by default)
+
 
 def is_data_url(url: str) -> bool:
     return url.startswith("data:") and ";base64," in url
@@ -245,8 +251,88 @@ class Engine:
 
         self.processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True, **({} if not hf_token else {"token": hf_token, "use_auth_token": hf_token}))
         self.model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs).eval()
-
+        
         self.model_id = model_id
+        self.tokenizer = getattr(self.processor, "tokenizer", None)
+        self.last_context_info: Dict[str, Any] = {}
+
+    def _model_max_context(self) -> int:
+        try:
+            cfg = getattr(self.model, "config", None)
+            if cfg is not None:
+                v = getattr(cfg, "max_position_embeddings", None)
+                if isinstance(v, int) and v > 0 and v < 10_000_000:
+                    return v
+        except Exception:
+            pass
+        try:
+            mx = int(getattr(self.tokenizer, "model_max_length", 0) or 0)
+            if mx > 0 and mx < 10_000_000_000:
+                return mx
+        except Exception:
+            pass
+        return 32768
+
+    def _count_prompt_tokens(self, text: str) -> int:
+        try:
+            if self.tokenizer is not None:
+                enc = self.tokenizer([text], add_special_tokens=False, return_attention_mask=False)
+                ids = enc["input_ids"][0]
+                return len(ids)
+        except Exception:
+            pass
+        return max(1, int(len(text.split()) * 1.3))
+
+    def _auto_compress_if_needed(self, mm_messages: List[Dict[str, Any]], max_new_tokens: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        info: Dict[str, Any] = {}
+        # Build once to measure
+        text0 = self.processor.apply_chat_template(mm_messages, tokenize=False, add_generation_prompt=True)
+        prompt_tokens = self._count_prompt_tokens(text0)
+        max_ctx = CONTEXT_MAX_TOKENS_AUTO if CONTEXT_MAX_TOKENS_AUTO > 0 else self._model_max_context()
+        budget = max(1024, max_ctx - CONTEXT_SAFETY_MARGIN - int(max_new_tokens))
+        if not ENABLE_AUTO_COMPRESSION or prompt_tokens <= budget:
+            info = {
+                "compressed": False,
+                "prompt_tokens": int(prompt_tokens),
+                "max_context": int(max_ctx),
+                "budget": int(budget),
+                "strategy": COMPRESSION_STRATEGY,
+                "dropped_messages": 0,
+            }
+            return mm_messages, info
+
+        # Truncate earliest non-system messages until within budget
+        msgs = list(mm_messages)
+        dropped = 0
+        guard = 0
+        while True:
+            text = self.processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
+            prompt_tokens = self._count_prompt_tokens(text)
+            if prompt_tokens <= budget or len(msgs) <= 1:
+                break
+            # drop earliest non-system
+            drop_idx = None
+            for j, m in enumerate(msgs):
+                if (m.get("role") or "user") != "system":
+                    drop_idx = j
+                    break
+            if drop_idx is None:
+                break
+            msgs.pop(drop_idx)
+            dropped += 1
+            guard += 1
+            if guard > 10000:
+                break
+
+        info = {
+            "compressed": True,
+            "prompt_tokens": int(prompt_tokens),
+            "max_context": int(max_ctx),
+            "budget": int(budget),
+            "strategy": "truncate",
+            "dropped_messages": int(dropped),
+        }
+        return msgs, info
 
     def build_mm_messages(self, openai_messages: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Image.Image], List[List[Image.Image]]]:
         """
@@ -328,6 +414,10 @@ class Engine:
 
         mm_messages, images, videos = self.build_mm_messages(messages)
 
+        # Auto-compress if needed based on context budget
+        mm_messages, ctx_info = self._auto_compress_if_needed(mm_messages, max_tokens)
+        self.last_context_info = ctx_info
+        
         # Build chat template
         text = self.processor.apply_chat_template(
             mm_messages,
@@ -377,6 +467,10 @@ class Engine:
 
         mm_messages, images, videos = self.build_mm_messages(messages)
 
+        # Auto-compress if needed based on context budget
+        mm_messages, ctx_info = self._auto_compress_if_needed(mm_messages, max_tokens)
+        self.last_context_info = ctx_info
+        
         text = self.processor.apply_chat_template(
             mm_messages,
             tokenize=False,
@@ -445,6 +539,20 @@ class _SSESession:
         self.cancel_event = threading.Event()
         self.listeners: int = 0
         self.cancel_timer = None  # type: ignore
+
+    def get_context_report(self) -> Dict[str, Any]:
+        try:
+            tk_max = int(getattr(self.tokenizer, "model_max_length", 0) or 0)
+        except Exception:
+            tk_max = 0
+        return {
+            "compressionEnabled": ENABLE_AUTO_COMPRESSION,
+            "strategy": COMPRESSION_STRATEGY,
+            "safetyMargin": CONTEXT_SAFETY_MARGIN,
+            "modelMaxContext": self._model_max_context(),
+            "tokenizerModelMaxLength": tk_max,
+            "last": self.last_context_info or {},
+        }
 
 class _SessionStore:
     def __init__(self, ttl_seconds: int = 600, max_sessions: int = 256):
@@ -585,7 +693,13 @@ def health():
         model_id = _engine.model_id
     elif _engine_error:
         err = _engine_error
-    return JSONResponse({"ok": True, "modelReady": ready, "modelId": model_id, "error": err})
+    ctx = None
+    try:
+        if _engine is not None:
+            ctx = _engine.get_context_report()
+    except Exception as _:
+        ctx = None
+    return JSONResponse({"ok": True, "modelReady": ready, "modelId": model_id, "error": err, "context": ctx})
 
 
 @app.post("/v1/chat/completions")
@@ -769,6 +883,11 @@ def chat_completions(request: Request, body: ChatRequest):
 
     import time, random
     now = int(time.time())
+    prompt_tokens_used = 0
+    try:
+        prompt_tokens_used = int(getattr(engine, "last_context_info", {}).get("prompt_tokens", 0))
+    except Exception:
+        prompt_tokens_used = 0
     resp = {
         "id": f"chatcmpl-{now}-{random.randint(100000, 999999)}",
         "object": "chat.completion",
@@ -782,10 +901,11 @@ def chat_completions(request: Request, body: ChatRequest):
             }
         ],
         "usage": {
-            "prompt_tokens": 0,
+            "prompt_tokens": prompt_tokens_used,
             "completion_tokens": 0,
-            "total_tokens": 0,
+            "total_tokens": prompt_tokens_used,
         },
+        "context": getattr(engine, "last_context_info", {}),
     }
     return JSONResponse(resp)
  

@@ -19,6 +19,7 @@
  *   DRY_RUN=1  (only list planned downloads)
  */
 
+require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const https = require('https');

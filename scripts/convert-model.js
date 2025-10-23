@@ -21,6 +21,7 @@
  *   CONVERT_ARGS="--outtype q8_0" (extra args appended to converter call)
  */
 
+require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');

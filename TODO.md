@@ -1,8 +1,8 @@
 # TODO
 
 - [ ] Initialize Git repository and perform initial commit.
-- [ ] Install necessary dependencies: `express`, `node-llama-cpp`.
-- [ ] Create the basic server structure in `index.js`.
+- [x] Install necessary dependencies: `express`, `node-llama-cpp`.
+- [x] Create the basic server structure in `index.js`.
 - [ ] Implement the `/v1/chat/completions` endpoint.
 - [ ] Load the Qwen3 model.
 - [ ] Implement the inference logic using `node-llama-cpp`.

@@ -1,0 +1,50 @@
+Modified Apache License, Version 2.0 (Royalty-Linked)
+
+Copyright (c) 2025 Alif Nurhidayat (GitHub: KillerKing93) <alifnurhidayatwork@gmail.com>
+
+1. Incorporation of Apache License, Version 2.0
+This Software is provided under the terms of the Apache License, Version 2.0, with the additional terms set forth below. Except as modified herein, the full text of the Apache License, Version 2.0 applies and is incorporated by reference:
+https://www.apache.org/licenses/LICENSE-2.0
+
+2. Additional Terms — Commercial Royalty
+2.1. Commercial Use of this Software is subject to a royalty obligation to the Licensor (the copyright holder), unless explicitly exempted below.
+2.2. “Commercial Use” means any use, distribution, SaaS offering, internal deployment tied to revenue generation or cost reduction, embedding in a paid product or service, or use by for-profit entities for business operations.
+2.3. “Licensor” means the copyright holder named above.
+
+3. Royalty Schedule (Guidance)
+The payable royalty ranges from 5% up to 25% of net revenue attributable to the Software, determined as follows:
+- 5%: Minimal or ancillary use (non-core functionality, prototypes, or internal tools with limited scope).
+- 10%: Moderate use (Software forms a notable but non-primary component of a commercial product or service).
+- 15%: Significant use (Software materially contributes to value delivery or operational savings).
+- 20%: Core use (Software is a primary component enabling the product/service).
+- 25%: White-label or redistribution scenarios where the Software is central and repackaged for resale.
+Notes:
+- “Net revenue attributable” should reasonably apportion revenue or savings connected to the Software’s role.
+- When in doubt, contact the Licensor to agree on a fair rate and basis. Written waivers or adjustments override this schedule.
+
+4. Exemptions
+4.1. PT. ASCON INOVASI DATA is granted a perpetual, worldwide, royalty-free license to use, reproduce, distribute, modify, and create derivative works of the Software for any purpose.
+4.2. Non-commercial academic research and open-source contributions not tied to revenue generation are generally exempt from royalties. However, redistribution or commercial hosting still requires compliance with Section 2.
+
+5. Reporting and Payment
+5.1. For Commercial Use, Licensee shall make a good-faith effort to notify the Licensor within 30 days of first commercial deployment and, if requested, provide a brief description of the use case to determine the appropriate royalty tier.
+5.2. Royalties shall be settled quarterly unless otherwise agreed in writing.
+
+6. No Warranty; Limitation of Liability
+As per Apache License 2.0 Sections 7 and 8, the Software is provided “AS IS,” without warranties or conditions of any kind, and Licensor shall not be liable for any damages arising from the use of the Software.
+
+7. Patent Grant
+As per Apache License 2.0 Section 3. No additional patent licenses are granted or implied beyond Apache 2.0.
+
+8. Attribution
+Attribution notices required by Apache 2.0 must be preserved in source distributions and, where practical, in documentation and About screens of products/services using the Software.
+
+9. Severability
+If any provision of these Additional Terms is held unenforceable, the remaining provisions shall remain in full force and effect, and the unenforceable provision shall be enforced to the maximum extent permissible.
+
+10. Contact
+For royalty discussions, waivers, or clarifications:
+- Licensor: Alif Nurhidayat (KillerKing93)
+- Email: alifnurhidayatwork@gmail.com
+
+By using this Software in a Commercial Use, you acknowledge the applicability of these Additional Terms alongside the Apache License, Version 2.0.

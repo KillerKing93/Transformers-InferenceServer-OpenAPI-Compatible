@@ -37,6 +37,9 @@ import time
 import uuid
 import sqlite3
 from collections import deque
+import subprocess
+import sys
+import shutil
 
 # Load env
 try:
@@ -49,6 +52,7 @@ except Exception:
 import requests
 from PIL import Image
 import numpy as np
+from huggingface_hub import snapshot_download, list_repo_files, hf_hub_download, get_hf_file_metadata
 
 # Server config
 PORT = int(os.getenv("PORT", "3000"))
@@ -73,6 +77,101 @@ CONTEXT_MAX_TOKENS_AUTO = int(os.getenv("CONTEXT_MAX_TOKENS_AUTO", "0"))  # 0 ->
 CONTEXT_SAFETY_MARGIN = int(os.getenv("CONTEXT_SAFETY_MARGIN", "256"))
 COMPRESSION_STRATEGY = os.getenv("COMPRESSION_STRATEGY", "truncate")  # truncate | summarize (future)
 
+# Eager model loading (download/check at startup before serving traffic)
+EAGER_LOAD_MODEL = str(os.getenv("EAGER_LOAD_MODEL", "1")).lower() in ("1", "true", "yes", "y")
+
+def _log(msg: str):
+    # Consistent, flush-immediate startup logs
+    print(f"[startup] {msg}", flush=True)
+
+def prefetch_model_assets(repo_id: str, token: Optional[str]) -> Optional[str]:
+    """
+    Reproducible prefetch driven by huggingface-cli:
+    - Downloads the ENTIRE repo using CLI (visible progress bar).
+    - Returns the local directory path where the repo is mirrored.
+    - If CLI is unavailable, falls back to verbose API prefetch.
+    """
+    try:
+        # Enable accelerated transfer + xet if available
+        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+        os.environ.setdefault("HF_HUB_ENABLE_XET", "1")
+
+        cache_dir = os.getenv("HF_HOME") or os.getenv("TRANSFORMERS_CACHE") or ""
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
+
+        # Resolve huggingface-cli path (Windows-friendly)
+        cli_path = shutil.which("huggingface-cli")
+        if not cli_path:
+            candidates = []
+            appdata = os.getenv("APPDATA")
+            if appdata:
+                candidates.append(os.path.join(appdata, "Python", "Python312", "Scripts", "huggingface-cli.exe"))
+            candidates.append(os.path.join(os.path.dirname(sys.executable), "Scripts", "huggingface-cli.exe"))
+            cli_path = next((p for p in candidates if os.path.exists(p)), None)
+
+        # Preferred: one-shot CLI download for the whole repo (shows live progress)
+        if cli_path:
+            local_root = os.path.join(cache_dir if cache_dir else ".", repo_id.replace("/", "_"))
+            os.makedirs(local_root, exist_ok=True)
+            _log(f"Using huggingface-cli to download entire repo -> '{local_root}'")
+            cmd = [
+                cli_path,
+                "download",
+                repo_id,
+                "--repo-type",
+                "model",
+                "--local-dir",
+                local_root,
+                "--local-dir-use-symlinks",
+                "False",
+                "--resume",
+            ]
+            if token:
+                cmd += ["--token", token]
+            # Inherit stdio; users will see a proper progress bar
+            subprocess.run(cmd, check=False)
+            # Verify we have the essential files
+            if os.path.exists(os.path.join(local_root, "config.json")) or os.path.exists(os.path.join(local_root, "model.safetensors")):
+                _log("CLI prefetch completed")
+                return local_root
+            else:
+                _log("CLI prefetch finished but essential files not found; will fallback to API mirroring")
+
+        # Fallback: verbose API-driven prefetch with per-file logging
+        _log(f"Prefetching (API) repo={repo_id} to cache='{cache_dir}'")
+        try:
+            files = list_repo_files(repo_id, repo_type="model", token=token)
+        except Exception as e:
+            _log(f"list_repo_files failed ({type(e).__name__}: {e}); falling back to snapshot_download")
+            snapshot_download(repo_id, token=token, local_files_only=False)
+            _log("Prefetch completed (snapshot)")
+            return None
+
+        total = len(files)
+        _log(f"Found {total} files to ensure cached (API)")
+        for i, fn in enumerate(files, start=1):
+            try:
+                meta = get_hf_file_metadata(repo_id, fn, repo_type="model", token=token)
+                size_bytes = meta.size or 0
+            except Exception:
+                size_bytes = 0
+            size_mb = size_bytes / (1024 * 1024) if size_bytes else 0.0
+            _log(f"[{i}/{total}] fetching '{fn}' (~{size_mb:.2f} MB)")
+            _ = hf_hub_download(
+                repo_id=repo_id,
+                filename=fn,
+                repo_type="model",
+                token=token,
+                local_files_only=False,
+                resume_download=True,
+            )
+            _log(f"[{i}/{total}] done '{fn}'")
+        _log("Prefetch completed (API)")
+        return None
+    except Exception as e:
+        _log(f"Prefetch skipped: {type(e).__name__}: {e}")
+        return None
 
 def is_data_url(url: str) -> bool:
     return url.startswith("data:") and ";base64," in url
@@ -221,24 +320,53 @@ class ChatRequest(BaseModel):
 class Engine:
     def __init__(self, model_id: str, hf_token: Optional[str] = None):
         # Lazy import heavy deps
-        from transformers import AutoProcessor, AutoModelForCausalLM
+        from transformers import AutoProcessor, AutoModelForCausalLM, AutoModelForVision2Seq, AutoModel
+        # AutoModelForImageTextToText is the v5+ replacement for Vision2Seq in Transformers
+        try:
+            from transformers import AutoModelForImageTextToText  # type: ignore
+        except Exception:
+            AutoModelForImageTextToText = None  # type: ignore
 
         model_kwargs: Dict[str, Any] = {
             "trust_remote_code": True,
         }
         if hf_token:
+            # Only pass 'token' (use_auth_token is deprecated and causes conflicts)
             model_kwargs["token"] = hf_token
-            model_kwargs["use_auth_token"] = hf_token  # compatibility alias
         # Device and dtype
         model_kwargs["device_map"] = DEVICE_MAP
         model_kwargs["torch_dtype"] = TORCH_DTYPE if TORCH_DTYPE != "auto" else "auto"
 
+        # Processor (handles text + images/videos)
+        proc_kwargs: Dict[str, Any] = {"trust_remote_code": True}
+        if hf_token:
+            proc_kwargs["token"] = hf_token
         self.processor = AutoProcessor.from_pretrained(
             model_id,
-            trust_remote_code=True,
-            **({} if not hf_token else {"token": hf_token, "use_auth_token": hf_token}),
+            **proc_kwargs,
         )  # pragma: no cover
-        self.model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs).eval()  # pragma: no cover
+
+        # Prefer ImageTextToText (Transformers v5 path), then Vision2Seq, then CausalLM as a last resort
+        model = None
+        if 'AutoModelForImageTextToText' in globals() and AutoModelForImageTextToText is not None:
+            try:
+                model = AutoModelForImageTextToText.from_pretrained(model_id, **model_kwargs)  # pragma: no cover
+            except Exception:
+                model = None
+        if model is None:
+            try:
+                model = AutoModelForVision2Seq.from_pretrained(model_id, **model_kwargs)  # pragma: no cover
+            except Exception:
+                model = None
+        if model is None:
+            try:
+                model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)  # pragma: no cover
+            except Exception:
+                model = None
+        if model is None:
+            # Generic AutoModel as last-resort with trust_remote_code to load custom architectures
+            model = AutoModel.from_pretrained(model_id, **model_kwargs)  # pragma: no cover
+        self.model = model.eval()  # pragma: no cover
 
         self.model_id = model_id
         self.tokenizer = getattr(self.processor, "tokenizer", None)
@@ -673,6 +801,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Startup hook is defined after get_engine() so globals are initialized first.
+
 # Engine singletons
 _engine: Optional[Engine] = None
 _engine_error: Optional[str] = None
@@ -684,12 +814,31 @@ def get_engine() -> Engine:
         return _engine
     try:
         model_id = DEFAULT_MODEL_ID
-        _engine = Engine(model_id=model_id, hf_token=HF_TOKEN)
+        _log(f"Preparing model '{model_id}' (HF_HOME={os.getenv('HF_HOME')}, cache={os.getenv('TRANSFORMERS_CACHE')})")
+        local_repo_dir = prefetch_model_assets(model_id, HF_TOKEN)
+        load_id = local_repo_dir if (local_repo_dir and os.path.exists(os.path.join(local_repo_dir, 'config.json'))) else model_id
+        _log(f"Loading processor and model from: {load_id}")
+        _engine = Engine(model_id=load_id, hf_token=HF_TOKEN)
         _engine_error = None
+        _log(f"Model ready: {_engine.model_id}")
         return _engine
     except Exception as e:
         _engine_error = f"{type(e).__name__}: {e}"
+        _log(f"Engine init failed: {_engine_error}")
         raise
+
+# Eager-load model at startup after definitions so it downloads/checks before serving traffic.
+@app.on_event("startup")
+def _startup_load_model():
+    if EAGER_LOAD_MODEL:
+        print("[startup] EAGER_LOAD_MODEL=1: initializing model...")
+        try:
+            _ = get_engine()
+            print("[startup] Model loaded:", _engine.model_id if _engine else "unknown")
+        except Exception as e:
+            # Fail fast if model cannot be initialized
+            print("[startup] Model load failed:", e)
+            raise
 
 
 @app.get("/", tags=["meta"])

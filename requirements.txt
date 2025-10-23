@@ -24,3 +24,7 @@ pydantic>=2.0.0
 #       pip install torch --index-url https://download.pytorch.org/whl/cpu
 #     NVIDIA CUDA (example for cu124, adjust as needed):
 #       pip install torch --index-url https://download.pytorch.org/whl/cu124
+# Testing and tooling
+pytest>=8.0.0
+pytest-cov>=4.1.0
+pyyaml>=6.0.0

@@ -1,0 +1,78 @@
+name: Sync to Hugging Face Space
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  HF_SPACE_ID: KillerKing93/Transformers-InferenceServer-OpenAPI-Compatible
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install huggingface_hub
+      run: pip install --upgrade "huggingface_hub[cli]>=0.24.0"
+
+    - name: Verify HF auth
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        python - <<'PY'
+        import os, sys
+        from huggingface_hub import HfApi, whoami
+        token=os.environ.get("HF_TOKEN")
+        if not token:
+            print("HF_TOKEN is not set", file=sys.stderr); sys.exit(1)
+        api=HfApi(token=token)
+        info=whoami(token=token)
+        print("HF user:", info.get("name") or info.get("email") or "unknown")
+        PY
+
+    - name: Upload repo to Space
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        HF_SPACE_ID: ${{ env.HF_SPACE_ID }}
+        GITHUB_SHA: ${{ github.sha }}
+      run: |
+        python - <<'PY'
+        import os
+        from huggingface_hub import HfApi
+        token=os.environ["HF_TOKEN"]
+        space_id=os.environ["HF_SPACE_ID"]
+        api = HfApi(token=token)
+        ignore_patterns = [
+          ".git/*",
+          ".github/*",
+          "hf-cache/*",
+          "__pycache__/*",
+          "*.pyc",
+          "*.pyo",
+          "*.pyd",
+          ".coverage",
+        ]
+        repo_id = space_id
+        if not repo_id.startswith("spaces/"):
+            repo_id = f"spaces/{repo_id}"
+        api.upload_folder(
+            repo_id=repo_id,
+            repo_type="space",
+            folder_path=".",
+            path_in_repo=".",
+            ignore_patterns=ignore_patterns,
+            commit_message=f"Sync from GitHub {os.environ.get('GITHUB_SHA','')[:7]}",
+            create_pr=False,
+        )
+        print("Space sync complete")
+        PY

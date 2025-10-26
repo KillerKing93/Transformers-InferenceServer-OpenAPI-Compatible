@@ -27,7 +27,7 @@ ARG TORCH_VER_NVIDIA=2.6.0
 ARG TORCH_VER_AMD=2.5.1+rocm6.2
 
 # Control whether to bake the model into the image (1) or skip and download at runtime (0)
-ARG BAKE_MODEL=1
+ARG BAKE_MODEL=0
 
 ENV BACKEND=${BACKEND}
 ENV BAKE_MODEL=${BAKE_MODEL}

@@ -62,9 +62,8 @@ jobs:
           "*.pyd",
           ".coverage",
         ]
+        # Pass plain "namespace/repo_name" and specify repo_type="space"
         repo_id = space_id
-        if not repo_id.startswith("spaces/"):
-            repo_id = f"spaces/{repo_id}"
         api.upload_folder(
             repo_id=repo_id,
             repo_type="space",

@@ -74,6 +74,12 @@ Health check:
 curl http://localhost:3000/health
 ```
 
+Swagger UI:
+http://localhost:3000/docs
+
+OpenAPI (YAML):
+http://localhost:3000/openapi.yaml
+
 Notes:
 - These are with-model images; the first pull is large. In CI, after "Model downloaded." BuildKit may appear idle while tarring/committing the multi‑GB layer.
 - Host requirements:
@@ -144,6 +150,10 @@ Cancel session API (custom extension)
 
 Endpoints (OpenAI-compatible)
 
+- Swagger UI
+  GET /docs
+- OpenAPI (YAML)
+  GET /openapi.yaml
 - Health
   GET /health
   Example:
@@ -161,13 +171,13 @@ Endpoints (OpenAI-compatible)
   Example (Windows CMD):
   curl -X POST http://localhost:3000/v1/chat/completions ^
   -H "Content-Type: application/json" ^
-  -d "{\"model\":\"qwen-local\",\"messages\":[{\"role\":\"user\",\"content\":\"Describe this image briefly\"}],\"max_tokens\":128}"
+  -d "{\"model\":\"qwen-local\",\"messages\":[{\"role\":\"user\",\"content\":\"Describe this image briefly\"}],\"max_tokens\":4096}"
 
   Example (PowerShell):
   $body = @{
   model = "qwen-local"
   messages = @(@{ role = "user"; content = "Hello Qwen3!" })
-  max_tokens = 128
+  max_tokens = 4096
   } | ConvertTo-Json -Depth 5
   curl -Method POST http://localhost:3000/v1/chat/completions -ContentType "application/json" -Body $body
 
@@ -452,7 +462,7 @@ After deploy:
 - Inference:
   curl -X POST https://YOUR-SERVICE.onrender.com/v1/chat/completions \
     -H "Content-Type: application/json" \
-    -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":128}"
+    -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":4096}"
 
 ## Deploy on Hugging Face Spaces
 
@@ -506,10 +516,11 @@ D) Speed up cold starts and caching
 
 E) Space endpoints
 - Base URL: https://huggingface.co/spaces/YOUR_USERNAME/my-qwen3-vl-server (Spaces proxy to your container)
-- Health: GET /health (implemented by [Python.function health](main.py:871))
-- OpenAPI YAML: GET /openapi.yaml (implemented by [Python.openapi_yaml](main.py:863))
-- Chat Completions: POST /v1/chat/completions (non-stream + SSE) [Python.function chat_completions](main.py:891)
-- Cancel: POST /v1/cancel/{session_id} [Python.function cancel_session](main.py:1091)
+- Swagger UI: GET /docs (interactive API with examples)
+- Health: GET /health (implemented by [Python.function health](main.py:951))
+- OpenAPI YAML: GET /openapi.yaml (implemented by [Python.openapi_yaml](main.py:943))
+- Chat Completions: POST /v1/chat/completions (non-stream + SSE) [Python.function chat_completions](main.py:971)
+- Cancel: POST /v1/cancel/{session_id} [Python.function cancel_session](main.py:1191)
 
 F) Quick test after the Space is “Running”
 - Health:
@@ -517,7 +528,7 @@ F) Quick test after the Space is “Running”
 - Non-stream:
   curl -s -X POST https://YOUR-SPACE-Subdomain.hf.space/v1/chat/completions \
     -H "Content-Type: application/json" \
-    -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Hello from HF Spaces!\"}],\"max_tokens\":128}"
+    -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Hello from HF Spaces!\"}],\"max_tokens\":4096}"
 - Streaming:
   curl -N -H "Content-Type: application/json" \
     -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" \

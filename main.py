@@ -71,7 +71,8 @@ from huggingface_hub import snapshot_download, list_repo_files, hf_hub_download,
 PORT = int(os.getenv("PORT", "3000"))
 DEFAULT_MODEL_ID = os.getenv("MODEL_REPO_ID", "Qwen/Qwen3-VL-2B-Thinking")
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip() or None
-DEFAULT_MAX_TOKENS = int(os.getenv("MAX_TOKENS", "256"))
+# Default max tokens: honor env, fallback to 4096 as previously discussed
+DEFAULT_MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
 DEFAULT_TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
 MAX_VIDEO_FRAMES = int(os.getenv("MAX_VIDEO_FRAMES", "16"))
 DEVICE_MAP = os.getenv("DEVICE_MAP", "auto")

@@ -105,8 +105,16 @@ def prefetch_model_assets(repo_id: str, token: Optional[str]) -> Optional[str]:
     - If CLI is unavailable, falls back to verbose API prefetch.
     """
     try:
-        # Enable accelerated transfer + xet if available
-        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+        # Enable accelerated transfer only if hf_transfer is installed; otherwise disable to avoid runtime errors on Spaces
+        try:
+            import importlib.util as _imputil
+            if _imputil.find_spec("hf_transfer") is not None:
+                os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+            else:
+                os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+        except Exception:
+            os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+        # XET acceleration if available; harmless if missing
         os.environ.setdefault("HF_HUB_ENABLE_XET", "1")
 
         cache_dir = os.getenv("HF_HOME") or os.getenv("TRANSFORMERS_CACHE") or ""

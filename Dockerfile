@@ -23,6 +23,7 @@ ARG BACKEND=cpu
 # - CUDA cu124 index publishes up to 2.6.0 (auto-resolves to +cu124)
 # - ROCm 6.2 index publishes up to 2.5.1+rocm6.2 (must include local tag)
 ARG TORCH_VER_CPU=2.9.0
+ARG TORCHVISION_VER_CPU=0.24.0
 ARG TORCH_VER_NVIDIA=2.6.0
 ARG TORCH_VER_AMD=2.5.1+rocm6.2
 
@@ -35,7 +36,7 @@ ENV PIP_NO_CACHE_DIR=1
 
 # Install appropriate PyTorch for the selected backend, then the rest
 RUN if [ "$BACKEND" = "cpu" ]; then \
-      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==${TORCH_VER_CPU}; \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==${TORCH_VER_CPU} torchvision==${TORCHVISION_VER_CPU}; \
     elif [ "$BACKEND" = "nvidia" ]; then \
       pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu124 torch==${TORCH_VER_NVIDIA}; \
     elif [ "$BACKEND" = "amd" ]; then \

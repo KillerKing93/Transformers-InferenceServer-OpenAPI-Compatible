@@ -25,7 +25,7 @@ import tempfile
 import contextlib
 from typing import Any, Dict, List, Optional, Tuple, Deque, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
@@ -408,6 +408,17 @@ class ChatCompletionResponse(BaseModel):
     choices: List[ChoiceModel]
     usage: UsageModel
     context: Dict[str, Any] = {}
+
+class HealthResponse(BaseModel):
+    ok: bool
+    modelReady: bool
+    modelId: str
+    error: Optional[str] = None
+    context: Optional[Dict[str, Any]] = None
+
+class CancelResponse(BaseModel):
+    ok: bool
+    session_id: str
 
 
 class Engine:
@@ -948,7 +959,7 @@ def openapi_yaml():
     return Response(yml, media_type="application/yaml")
 
 
-@app.get("/health", tags=["health"])
+@app.get("/health", tags=["health"], response_model=HealthResponse)
 def health():
     ready = False
     err = None
@@ -989,7 +1000,12 @@ def health():
         }
     },
 )
-def chat_completions(request: Request, body: ChatRequest):
+def chat_completions(
+    request: Request,
+    body: ChatRequest,
+    last_event_id: Optional[str] = Query(default=None, alias="last_event_id", description="Resume SSE from this id: 'session_id:index'"),
+    last_event_id_header: Optional[str] = Header(default=None, alias="Last-Event-ID", convert_underscores=False, description="SSE resume id 'session_id:index'"),
+):
     # Ensure engine is loaded
     try:
         engine = get_engine()
@@ -1003,13 +1019,13 @@ def chat_completions(request: Request, body: ChatRequest):
     temperature = float(body.temperature) if body.temperature is not None else DEFAULT_TEMPERATURE
     do_stream = bool(body.stream)
 
-    # Parse Last-Event-ID for resuming and derive/align session_id
-    last_event_id_header = request.headers.get("last-event-id")
+    # Parse Last-Event-ID (header or ?last_event_id) and derive/align session_id
+    le_id = last_event_id_header or last_event_id
     sid_from_header: Optional[str] = None
     last_idx_from_header: int = -1
-    if last_event_id_header:
+    if le_id:
         try:
-            sid_from_header, idx_str = last_event_id_header.split(":", 1)
+            sid_from_header, idx_str = le_id.split(":", 1)
             last_idx_from_header = int(idx_str)
         except Exception:
             sid_from_header = None
@@ -1188,7 +1204,7 @@ def chat_completions(request: Request, body: ChatRequest):
     return StreamingResponse(sse_generator(), media_type="text/event-stream", headers=headers)
 
 
-@app.post("/v1/cancel/{session_id}", tags=["chat"])
+@app.post("/v1/cancel/{session_id}", tags=["chat"], response_model=CancelResponse, summary="Cancel a streaming session")
 def cancel_session(session_id: str):
     sess = _STORE.get(session_id)
     if sess is not None:

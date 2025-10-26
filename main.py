@@ -30,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 from fastapi.responses import StreamingResponse, Response, FileResponse
+from starlette.staticfiles import StaticFiles
 import json
 import yaml
 import threading
@@ -907,6 +908,13 @@ app.add_middleware(
 )
 
 # Startup hook is defined after get_engine() so globals are initialized first.
+# Serve static web UI if present
+_WEB_DIR = os.path.join(ROOT_DIR, "web")
+if os.path.isdir(_WEB_DIR):
+    try:
+        app.mount("/web", StaticFiles(directory=_WEB_DIR, html=True), name="web")
+    except Exception:
+        pass
 
 # Engine singletons
 _engine: Optional[Engine] = None
@@ -957,7 +965,19 @@ def root():
     index_path = os.path.join(ROOT_DIR, "web", "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path, media_type="text/html; charset=utf-8")
-    return JSONResponse({"ok": True, "message": "UI not found. Build placed under ./web/index.html"}, status_code=200)
+    # Inline minimal fallback to make root return an HTML page even if COPY failed
+    html = """<!doctype html><html><head><meta charset='utf-8'><title>Qwen3‑VL Chat</title></head>
+    <body style="font-family:system-ui,Segoe UI,Roboto;padding:24px;background:#0f172a;color:#e2e8f0">
+    <h2>Qwen3‑VL Chat UI</h2>
+    <p>The static UI was not found inside the container. This page is a fallback.</p>
+    <p>Try pulling the latest image or rebuilding the Space so that <code>/app/web/index.html</code> is present.</p>
+    <p>Once copied, this URL will serve the full UI. For now you can open the raw UI file from the repo or call the API directly.</p>
+    <ul>
+      <li><a href="./docs" style="color:#93c5fd">Swagger UI</a></li>
+      <li><a href="./openapi.yaml" style="color:#93c5fd">OpenAPI YAML</a></li>
+    </ul>
+    </body></html>"""
+    return Response(html, media_type="text/html; charset=utf-8")
 
 
 @app.get("/openapi.yaml", tags=["meta"])

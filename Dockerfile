@@ -48,6 +48,8 @@ RUN if [ "$BACKEND" = "cpu" ]; then \
 
 # Copy source code
 COPY main.py .
+# Include client UI so root (/) can serve web/index.html
+COPY web/ web/
 COPY tests/ tests/
 
 # Copy env template (users can override with volume or env)

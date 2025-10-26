@@ -14,8 +14,15 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     strategy:
+      max-parallel: 1
       matrix:
-        backend: [cpu, nvidia, amd]
+        include:
+          - backend: cpu
+            bake_model: 1
+          - backend: nvidia
+            bake_model: 0
+          - backend: amd
+            bake_model: 0
     permissions:
       contents: read
       packages: write
@@ -39,26 +46,22 @@ jobs:
       uses: docker/metadata-action@v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        flavor: |
-          latest=true
-          suffix=-with-model-${{ matrix.backend }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push Docker image (${{ matrix.backend }})
       uses: docker/build-push-action@v5
       with:
         context: .
         push: true
-        tags: ${{ steps.meta.outputs.tags }}
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ matrix.backend }}-${{ matrix.bake_model == 1 && 'with-model' || 'runtime' }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.backend }}-${{ matrix.bake_model == 1 && 'with-model' || 'runtime' }}
+          ${{ matrix.backend == 'cpu' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
         platforms: linux/amd64
         build-args: |
           BACKEND=${{ matrix.backend }}
+          BAKE_MODEL=${{ matrix.bake_model }}
         secrets: |
           HF_TOKEN=${{ secrets.HF_TOKEN }}

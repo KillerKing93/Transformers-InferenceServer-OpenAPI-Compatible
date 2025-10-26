@@ -16,6 +16,31 @@ Model:
 
 Node.js artifacts and scripts from the previous project have been removed.
 
+## Quick Start
+
+### Option 1: Run with Docker (Recommended)
+
+1. Pull the pre-built image from GitHub Container Registry:
+
+   ```bash
+   docker pull ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest
+   ```
+
+2. Run the container:
+
+   ```bash
+   docker run -p 3000:3000 \
+     -e HF_TOKEN=your_hf_token_here \
+     ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest
+   ```
+
+3. Test the API:
+   ```bash
+   curl http://localhost:3000/health
+   ```
+
+### Option 2: Run Locally
+
 Requirements
 
 - Python 3.10+
@@ -49,24 +74,26 @@ See [.env.example](.env.example). Important variables:
 - PORT=3000
 - MODEL_REPO_ID=Qwen/Qwen3-VL-2B-Thinking
 - HF_TOKEN= # optional if gated
-- MAX_TOKENS=256
+- MAX_TOKENS=4096
 - TEMPERATURE=0.7
 - MAX_VIDEO_FRAMES=16
 - DEVICE_MAP=auto
 - TORCH_DTYPE=auto
 
 Additional streaming/persistence configuration
-- PERSIST_SESSIONS=1                 # enable SQLite-backed resumable SSE
-- SESSIONS_DB_PATH=sessions.db       # SQLite db path
-- SESSIONS_TTL_SECONDS=600           # TTL for finished sessions before GC
-- CANCEL_AFTER_DISCONNECT_SECONDS=3600  # auto-cancel generation if all clients disconnect for this many seconds (0=disable)
+
+- PERSIST_SESSIONS=1 # enable SQLite-backed resumable SSE
+- SESSIONS_DB_PATH=sessions.db # SQLite db path
+- SESSIONS_TTL_SECONDS=600 # TTL for finished sessions before GC
+- CANCEL_AFTER_DISCONNECT_SECONDS=3600 # auto-cancel generation if all clients disconnect for this many seconds (0=disable)
 
 Cancel session API (custom extension)
+
 - Endpoint: POST /v1/cancel/{session_id}
 - Purpose: Manually cancel an in-flight streaming generation for the given session_id. Not part of OpenAI Chat Completions spec (the newer OpenAI Responses API has cancel), so this is provided as a practical extension.
 - Example (Windows CMD):
   curl -X POST http://localhost:3000/v1/cancel/mysession123
-Run
+  Run
 
 - Direct:
   python main.py
@@ -191,12 +218,12 @@ Changelog and Architecture
 
 - We will update [ARCHITECTURE.md](ARCHITECTURE.md) to reflect the Python server flow.
 
-
 ## Streaming behavior, resume, and reconnections
 
 The server streams responses using Server‑Sent Events (SSE) from [Python.function chat_completions()](main.py:457), driven by token iteration in [Python.function infer_stream](main.py:361). It now supports resumable streaming using an in‑memory ring buffer and SSE Last-Event-ID, with optional SQLite persistence (enable PERSIST_SESSIONS=1).
 
 What’s implemented
+
 - Per-session in-memory ring buffer keyed by session_id (no external storage).
 - Each SSE event carries an SSE id line in the format "session_id:index" so clients can resume with Last-Event-ID.
 - On reconnect:
@@ -206,30 +233,33 @@ What’s implemented
 - Session TTL: ~10 minutes, buffer capacity: ~2048 events. Old or finished sessions are garbage-collected in-memory.
 
 How to start a streaming session
+
 - Minimal (server generates a session_id internally for SSE id lines):
   Windows CMD:
-    curl -N -H "Content-Type: application/json" ^
-         -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
-         http://localhost:3000/v1/chat/completions
+  curl -N -H "Content-Type: application/json" ^
+  -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
+  http://localhost:3000/v1/chat/completions
 
 - With explicit session_id (recommended if you want to resume):
   Windows CMD:
-    curl -N -H "Content-Type: application/json" ^
-         -d "{\"session_id\":\"mysession123\",\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
-         http://localhost:3000/v1/chat/completions
+  curl -N -H "Content-Type: application/json" ^
+  -d "{\"session_id\":\"mysession123\",\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
+  http://localhost:3000/v1/chat/completions
 
 How to resume after disconnect
+
 - Use the same session_id and the SSE Last-Event-ID header (or ?last_event_id=...):
   Windows CMD (resume from index 42):
-    curl -N -H "Content-Type: application/json" ^
-         -H "Last-Event-ID: mysession123:42" ^
-         -d "{\"session_id\":\"mysession123\",\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
-         http://localhost:3000/v1/chat/completions
+  curl -N -H "Content-Type: application/json" ^
+  -H "Last-Event-ID: mysession123:42" ^
+  -d "{\"session_id\":\"mysession123\",\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" ^
+  http://localhost:3000/v1/chat/completions
 
   Alternatively with query string:
-    http://localhost:3000/v1/chat/completions?last_event_id=mysession123:42
+  http://localhost:3000/v1/chat/completions?last_event_id=mysession123:42
 
 Event format
+
 - Chunks follow the OpenAI-style "chat.completion.chunk" shape in data payloads, plus an SSE id:
   id: mysession123:5
   data: {"id":"mysession123","object":"chat.completion.chunk","created":..., "model":"...", "choices":[{"index":0,"delta":{"content":" token"},"finish_reason":null}]}
@@ -239,26 +269,29 @@ Event format
   data: [DONE]
 
 Notes and limits
+
 - This implementation keeps session state only in memory; restarts will drop buffers.
 - If the buffer overflows before you resume, the earliest chunks may be unavailable.
 - Cancellation on client disconnect is not automatic; generation runs to completion in the background. A cancellable stopping-criteria can be added if required.
-
 
 ## Hugging Face repository files support
 
 This server loads the Qwen3-VL model via Transformers with `trust_remote_code=True`, so the standard files from the repo are supported and consumed automatically. Summary for https://huggingface.co/Qwen/Qwen3-VL-2B-Thinking/tree/main:
 
 - Used by model weights and architecture
+
   - model.safetensors — main weights loaded by AutoModelForCausalLM
   - config.json — architecture/config
   - generation_config.json — default gen params (we may override via request or env)
 
 - Used by tokenizer
+
   - tokenizer.json — primary tokenizer specification
   - tokenizer_config.json — tokenizer settings
   - merges.txt and vocab.json — fallback/compat files; if tokenizer.json exists, HF generally prefers it
 
 - Used by processors (multimodal)
+
   - preprocessor_config.json — image/text processor config
   - video_preprocessor_config.json — video processor config (frame sampling, etc.)
   - chat_template.json — chat formatting used by [Python.function infer](main.py:312) and [Python.function infer_stream](main.py:361) via `processor.apply_chat_template(...)`
@@ -267,18 +300,20 @@ This server loads the Qwen3-VL model via Transformers with `trust_remote_code=Tr
   - README.md, .gitattributes — ignored by runtime
 
 Notes:
+
 - We rely on Transformers’ AutoModelForCausalLM and AutoProcessor to resolve and use the above files; no manual parsing is required in our code.
 - With `trust_remote_code=True`, model-specific code from the repo may load additional assets transparently.
 - If the repo updates configs (e.g., new chat template), the server will pick them up on next load.
 
-
 ## Cancellation and session persistence
 
 - Auto-cancel on disconnect:
+
   - Generation is automatically cancelled if all clients disconnect for more than CANCEL_AFTER_DISCONNECT_SECONDS (default 3600 seconds = 1 hour). Configure in [.env.example](.env.example) via `CANCEL_AFTER_DISCONNECT_SECONDS`.
   - Implemented by a timer in [Python.function chat_completions](main.py:732) that triggers a cooperative stop through a stopping criteria in [Python.function infer_stream](main.py:375).
 
 - Manual cancel API (custom extension):
+
   - Endpoint: `POST /v1/cancel/{session_id}`
   - Cancels an ongoing streaming session and marks it finished in the store. Example (Windows CMD):
     curl -X POST http://localhost:3000/v1/cancel/mysession123
@@ -288,5 +323,5 @@ Notes:
   - Optional SQLite-backed persistence for resumable SSE (enable `PERSIST_SESSIONS=1` in [.env.example](.env.example)).
   - Database path: `SESSIONS_DB_PATH` (default: sessions.db)
   - Session TTL for GC: `SESSIONS_TTL_SECONDS` (default: 600)
-  - See implementation in [Python.class _SQLiteStore](main.py:481) and integration in [Python.function chat_completions](main.py:591).
+  - See implementation in [Python.class \_SQLiteStore](main.py:481) and integration in [Python.function chat_completions](main.py:591).
   - Redis is not implemented yet; the design isolates persistence so a Redis-backed store can be added as a drop-in.

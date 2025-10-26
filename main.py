@@ -29,7 +29,7 @@ from fastapi import FastAPI, HTTPException, Request, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, FileResponse
 import json
 import yaml
 import threading
@@ -946,10 +946,18 @@ def _startup_load_model():
             raise
 
 
-@app.get("/", tags=["meta"])
+@app.get("/", tags=["meta"], include_in_schema=False)
 def root():
-    """Liveness check."""
-    return JSONResponse({"ok": True})
+    """
+    Serve the client web UI. The UI calls an external Hugging Face Space API
+    (default is KillerKing93/Transformers-InferenceServer-OpenAPI) and does NOT
+    use internal server endpoints for chat. You can change the base via the input
+    field or ?api= query string in the page.
+    """
+    index_path = os.path.join(ROOT_DIR, "web", "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path, media_type="text/html; charset=utf-8")
+    return JSONResponse({"ok": True, "message": "UI not found. Build placed under ./web/index.html"}, status_code=200)
 
 
 @app.get("/openapi.yaml", tags=["meta"])

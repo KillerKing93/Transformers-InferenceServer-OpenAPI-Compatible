@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Qwen3‑VL Chat (HF Space API)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#0f172a; --fg:#e2e8f0; --muted:#94a3b8; --accent:#6366f1; --card:#111827; --chip:#1f2937; --border:#334155; }
+    html, body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    .app { display:flex; flex-direction:column; height:100%; max-width: 1200px; margin: 0 auto; }
+    header { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
+    header .title { font-weight:700; }
+    header input[type="text"] { flex: 1 1 360px; background:var(--card); border:1px solid var(--border); color:var(--fg); padding:8px 10px; border-radius:6px; }
+    header .small { color: var(--muted); font-size: 12px; }
+    main { flex:1; overflow:auto; padding: 16px; display:flex; gap:16px; }
+    .chat { flex: 1 1 auto; display:flex; flex-direction:column; gap:12px; }
+    .msg { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px; }
+    .msg.user { border-left: 3px solid #22c55e; }
+    .msg.assistant { border-left: 3px solid var(--accent); }
+    .role { font-weight:700; margin-bottom:6px; color: var(--muted); text-transform: uppercase; font-size: 12px; }
+    .content pre { white-space: pre-wrap; word-break: break-word; }
+    .media { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    .media img, .media video { max-width: 240px; max-height: 180px; border:1px solid var(--border); border-radius:8px; }
+    .aside { width: 320px; flex: 0 0 auto; display:flex; flex-direction:column; gap:12px; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px; }
+    .label { font-size: 12px; color: var(--muted); margin-bottom:6px; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
+    .controls textarea { width:100%; min-height: 80px; background:var(--card); border:1px solid var(--border); color:var(--fg); padding:8px; border-radius:8px; resize: vertical; }
+    button { background:var(--accent); color:white; border:0; padding:8px 12px; border-radius:8px; cursor:pointer; }
+    button.secondary { background: var(--chip); color: var(--fg); }
+    input[type="number"], input[type="text"] { background:var(--card); border:1px solid var(--border); color:var(--fg); padding:6px 8px; border-radius:6px; }
+    .chips { display:flex; gap:8px; flex-wrap: wrap; }
+    .chip { background:var(--chip); color:var(--fg); border:1px solid var(--border); padding:4px 8px; border-radius: 999px; font-size: 12px; }
+    footer { padding:10px 16px; border-top:1px solid var(--border); color: var(--muted); font-size:12px; display:flex; justify-content:space-between; gap:10px; flex-wrap: wrap; }
+    a { color: #93c5fd; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .hint { font-size: 12px; color: var(--muted); }
+    input[type="file"] { display:none; }
+    .file-btn { background: var(--chip); }
+    .preview { display:flex; gap:8px; flex-wrap: wrap; margin-top:8px; }
+    .preview-item { position:relative; }
+    .remove { position:absolute; top:4px; right:4px; background: #ef4444; color:white; border:0; border-radius: 6px; padding:2px 6px; cursor:pointer; font-size:12px;}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="title">Qwen3‑VL Chat</div>
+      <input id="apiBase" type="text" placeholder="HF Space API Base, e.g. https://killerking93-transformers-inferenceserver-openapi.hf.space" />
+      <button id="saveBase" class="secondary">Save Base</button>
+      <span id="health" class="small">Health: checking…</span>
+    </header>
+
+    <main>
+      <section class="chat" id="chat"></section>
+
+      <aside class="aside">
+        <div class="card">
+          <div class="label">Prompt</div>
+          <div class="controls">
+            <textarea id="prompt" placeholder="Ask anything… Supports images and videos."></textarea>
+            <div class="row">
+              <label for="file" class="file-btn button"><button class="secondary">Attach Image/Video</button></label>
+              <input id="file" type="file" accept="image/*,video/*" multiple />
+              <input id="maxTokens" type="number" min="1" max="8192" value="4096" title="Max tokens" />
+              <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.7" title="Temperature" />
+              <button id="send">Send (Stream)</button>
+            </div>
+            <div id="preview" class="preview"></div>
+            <div class="row" style="margin-top:8px;">
+              <button id="clearHistory" class="secondary">Clear History</button>
+              <span class="hint">Session <code id="sessionIdLabel"></code> — history saved locally</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="label">Hints</div>
+          <div class="chips">
+            <div class="chip">Images: embedded as base64</div>
+            <div class="chip">Videos: base64, frame-sampled by server</div>
+            <div class="chip">SSE Streaming</div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <footer>
+      <div>Powered by FastAPI + Transformers (Qwen3‑VL). Calls public HF Space API (no internal access).</div>
+      <div><a href="./docs" target="_blank">Swagger</a> · <a href="./openapi.yaml" target="_blank">OpenAPI YAML</a></div>
+    </footer>
+  </div>
+
+  <script>
+    // Config and state
+    const DEFAULT_SPACE = "https://killerking93-transformers-inferenceserver-openapi.hf.space";
+    const qs = new URLSearchParams(location.search);
+    const apiBaseInput = document.getElementById('apiBase');
+    const saveBaseBtn = document.getElementById('saveBase');
+    const healthEl = document.getElementById('health');
+    const chatEl = document.getElementById('chat');
+    const promptEl = document.getElementById('prompt');
+    const fileEl = document.getElementById('file');
+    const previewEl = document.getElementById('preview');
+    const sendBtn = document.getElementById('send');
+    const clearBtn = document.getElementById('clearHistory');
+    const sessionIdLabel = document.getElementById('sessionIdLabel');
+    const maxTokensEl = document.getElementById('maxTokens');
+    const temperatureEl = document.getElementById('temperature');
+
+    const store = {
+      get apiBase() { return localStorage.getItem('apiBase') || DEFAULT_SPACE; },
+      set apiBase(v) { localStorage.setItem('apiBase', v); },
+      get sessionId() {
+        let sid = localStorage.getItem('sessionId');
+        if (!sid) { sid = 'sess-' + Math.random().toString(16).slice(2, 10); localStorage.setItem('sessionId', sid); }
+        return sid;
+      },
+      get messages() {
+        const sid = this.sessionId;
+        try { return JSON.parse(localStorage.getItem(`chat:${sid}`) || '[]'); } catch { return []; }
+      },
+      set messages(arr) {
+        const sid = this.sessionId;
+        localStorage.setItem(`chat:${sid}`, JSON.stringify(arr));
+      },
+      clear() {
+        localStorage.removeItem(`chat:${this.sessionId}`);
+      }
+    };
+
+    apiBaseInput.value = qs.get('api') || store.apiBase;
+    sessionIdLabel.textContent = store.sessionId;
+
+    saveBaseBtn.onclick = () => {
+      const v = apiBaseInput.value.trim();
+      if (!/^https?:\/\//i.test(v)) { alert('Provide a valid API base (https://...)'); return; }
+      store.apiBase = v;
+      checkHealth();
+    };
+
+    async function checkHealth() {
+      healthEl.textContent = 'Health: checking…';
+      try {
+        const r = await fetch(new URL('/health', store.apiBase), { mode: 'cors' });
+        const j = await r.json();
+        healthEl.textContent = `Health: ${j.ok ? 'OK' : 'ERR'} · ModelReady=${j.modelReady ? 'yes' : 'no'} · Model=${j.modelId || 'unknown'}`;
+      } catch (e) {
+        healthEl.textContent = `Health: error (${e && e.message ? e.message : 'network'})`;
+      }
+    }
+
+    // UI helpers
+    function render() {
+      chatEl.innerHTML = '';
+      const messages = store.messages;
+      // Render messages grouped by role sequence
+      for (const msg of messages) {
+        const node = document.createElement('div');
+        node.className = `msg ${msg.role}`;
+        const role = document.createElement('div');
+        role.className = 'role';
+        role.textContent = msg.role;
+        node.appendChild(role);
+
+        const content = document.createElement('div');
+        content.className = 'content';
+        if (typeof msg.content === 'string') {
+          const pre = document.createElement('pre');
+          pre.textContent = msg.content;
+          content.appendChild(pre);
+        } else if (Array.isArray(msg.content)) {
+          const textParts = msg.content.filter(p => p.type === 'text');
+          for (const t of textParts) {
+            const pre = document.createElement('pre');
+            pre.textContent = t.text || '';
+            content.appendChild(pre);
+          }
+          const media = document.createElement('div');
+          media.className = 'media';
+          for (const p of msg.content) {
+            if (p.type === 'input_image' || p.type === 'image_url') {
+              const img = document.createElement('img');
+              if (p.b64_json) {
+                img.src = p.b64_json.startsWith('data:') ? p.b64_json : ('data:image/*;base64,' + p.b64_json);
+              } else if (p.image_url && p.image_url.url) {
+                img.src = p.image_url.url;
+              }
+              media.appendChild(img);
+            } else if (p.type === 'input_video' || p.type === 'video_url') {
+              const video = document.createElement('video');
+              video.controls = true;
+              if (p.b64_json) {
+                video.src = p.b64_json.startsWith('data:') ? p.b64_json : ('data:video/mp4;base64,' + p.b64_json);
+              } else if (p.video_url && p.video_url.url) {
+                video.src = p.video_url.url;
+              }
+              media.appendChild(video);
+            }
+          }
+          if (media.childElementCount) content.appendChild(media);
+        }
+        node.appendChild(content);
+        chatEl.appendChild(node);
+      }
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    // File handling
+    const fileQueue = [];
+    fileEl.addEventListener('change', async (e) => {
+      const files = Array.from(e.target.files || []);
+      for (const f of files) {
+        const b64 = await fileToDataURL(f);
+        fileQueue.push({ name: f.name, type: f.type, dataUrl: b64 });
+      }
+      renderPreview();
+      e.target.value = '';
+    });
+
+    function renderPreview() {
+      previewEl.innerHTML = '';
+      for (let i = 0; i < fileQueue.length; i++) {
+        const f = fileQueue[i];
+        const wrap = document.createElement('div');
+        wrap.className = 'preview-item';
+        const btn = document.createElement('button');
+        btn.className = 'remove';
+        btn.textContent = 'x';
+        btn.onclick = () => { fileQueue.splice(i, 1); renderPreview(); };
+        wrap.appendChild(btn);
+        if (f.type.startsWith('image/')) {
+          const img = document.createElement('img');
+          img.src = f.dataUrl;
+          img.style.maxWidth = '160px';
+          img.style.maxHeight = '120px';
+          wrap.appendChild(img);
+        } else if (f.type.startsWith('video/')) {
+          const video = document.createElement('video');
+          video.src = f.dataUrl;
+          video.controls = true;
+          video.style.maxWidth = '160px';
+          video.style.maxHeight = '120px';
+          wrap.appendChild(video);
+        } else {
+          const pre = document.createElement('pre');
+          pre.textContent = f.name;
+          wrap.appendChild(pre);
+        }
+        previewEl.appendChild(wrap);
+      }
+    }
+
+    function fileToDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function dataUrlToBase64(d) {
+      return d.includes('base64,') ? d.split('base64,')[1] : d;
+    }
+
+    // Build OpenAI-style messages array from stored history (already in that shape)
+    function getMessages() {
+      return store.messages;
+    }
+
+    function pushUserMessageFromUI() {
+      const msg = { role: 'user', content: [] };
+      const text = (promptEl.value || '').trim();
+      if (text) msg.content.push({ type: 'text', text });
+      for (const f of fileQueue) {
+        if (f.type.startsWith('image/')) {
+          msg.content.push({ type: 'input_image', b64_json: dataUrlToBase64(f.dataUrl) });
+        } else if (f.type.startsWith('video/')) {
+          msg.content.push({ type: 'input_video', b64_json: dataUrlToBase64(f.dataUrl) });
+        }
+      }
+      const messages = getMessages();
+      messages.push(msg);
+      store.messages = messages;
+      // clear UI queue
+      fileQueue.splice(0, fileQueue.length);
+      previewEl.innerHTML = '';
+      promptEl.value = '';
+      render();
+    }
+
+    async function sendStream() {
+      const apiBase = apiBaseInput.value.trim() || DEFAULT_SPACE;
+      const body = {
+        messages: getMessages(),
+        stream: true,
+        session_id: store.sessionId,
+        max_tokens: Math.max(1, parseInt(maxTokensEl.value || '4096', 10)),
+        temperature: parseFloat(temperatureEl.value || '0.7'),
+      };
+
+      const url = new URL('/v1/chat/completions', apiBase);
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        mode: 'cors',
+      });
+      if (!resp.ok || !resp.body) {
+        const text = await resp.text().catch(() => '');
+        throw new Error(`HTTP ${resp.status}: ${text}`);
+      }
+      // Prepare assistant message to accumulate streamed content
+      const messages = getMessages();
+      const asst = { role: 'assistant', content: '' };
+      messages.push(asst);
+      store.messages = messages;
+      render();
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // split SSE blocks
+        let idx;
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const block = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
+          const lines = block.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data:')) {
+              const data = line.slice(5).trim();
+              if (data === '[DONE]') continue;
+              try {
+                const j = JSON.parse(data);
+                const delta = (((j || {}).choices || [])[0] || {}).delta || {};
+                if (typeof delta.content === 'string' && delta.content.length) {
+                  // append token
+                  const msgs = getMessages();
+                  const last = msgs[msgs.length - 1];
+                  if (last && last.role === 'assistant') {
+                    last.content = (last.content || '') + delta.content;
+                    store.messages = msgs;
+                    render();
+                  }
+                }
+              } catch {}
+            }
+          }
+        }
+      }
+    }
+
+    sendBtn.onclick = async () => {
+      try {
+        pushUserMessageFromUI();
+        await sendStream();
+      } catch (e) {
+        alert('Send failed: ' + (e && e.message ? e.message : e));
+      }
+    };
+
+    clearBtn.onclick = () => {
+      if (confirm('Clear chat history for this session?')) {
+        store.clear(); render();
+      }
+    };
+
+    (async function init() {
+      render();
+      await checkHealth();
+      // Auto-save default base on first load if empty
+      if (!localStorage.getItem('apiBase')) localStorage.setItem('apiBase', apiBaseInput.value.trim() || DEFAULT_SPACE);
+    })();
+  </script>
+</body>
+</html>

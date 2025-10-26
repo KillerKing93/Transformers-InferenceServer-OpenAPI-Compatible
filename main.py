@@ -48,6 +48,19 @@ try:
 except Exception:
     pass
 
+# Ensure HF cache dirs are relative to this project by default
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_HF_CACHE = os.path.join(ROOT_DIR, "hf-cache")
+if not os.getenv("HF_HOME"):
+    os.environ["HF_HOME"] = DEFAULT_HF_CACHE
+if not os.getenv("TRANSFORMERS_CACHE"):
+    os.environ["TRANSFORMERS_CACHE"] = DEFAULT_HF_CACHE
+# Create directory eagerly to avoid later mkdir races
+try:
+    os.makedirs(os.environ["HF_HOME"], exist_ok=True)
+except Exception:
+    pass
+
 # Optional heavy deps are imported lazily inside Engine to improve startup UX
 import requests
 from PIL import Image

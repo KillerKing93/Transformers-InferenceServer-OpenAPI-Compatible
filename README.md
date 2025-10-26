@@ -1,3 +1,13 @@
+---
+title: "Transformers Inference Server (Qwen3‑VL)"
+emoji: 🐍
+colorFrom: purple
+colorTo: green
+sdk: docker
+app_port: 3000
+pinned: false
+---
+
 # Python FastAPI Inference Server (OpenAI-Compatible) for Qwen3-VL-2B-Thinking
 
 This repository has been migrated from a Node.js/llama.cpp stack to a Python/Transformers stack to fully support multimodal inference (text, images, videos) with the Hugging Face Qwen3 models.
@@ -356,3 +366,163 @@ Notes:
   - Session TTL for GC: `SESSIONS_TTL_SECONDS` (default: 600)
   - See implementation in [Python.class \_SQLiteStore](main.py:481) and integration in [Python.function chat_completions](main.py:591).
   - Redis is not implemented yet; the design isolates persistence so a Redis-backed store can be added as a drop-in.
+
+## Deploy on Render
+
+Render has two easy options. Since our image already bakes the model, the fastest path is to deploy the public Docker image (CPU). Render currently doesn’t provide NVIDIA/AMD GPUs for standard Web Services, so use the CPU image.
+
+Option A — Deploy public Docker image (recommended)
+1) In Render Dashboard: New → Web Service
+2) Environment: Docker → Public Docker image
+3) Image
+   - ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-cpu
+4) Instance and region
+   - Region: closest to your users
+   - Instance type: pick a plan with at least 16 GB RAM (more if you see OOM)
+5) Port/health
+   - Render auto-injects PORT; the server binds to it via [Python.os.getenv()](main.py:71)
+   - Health Check Path: /health (served by [Python.function health](main.py:871))
+6) Start command
+   - Leave blank; the image uses CMD ["python","main.py"] as defined in [Dockerfile](Dockerfile:54). The app entry is [Python.main()](main.py:1).
+7) Environment variables
+   - EAGER_LOAD_MODEL=1
+   - MAX_TOKENS=4096
+   - HF_TOKEN=your_hf_token_here (only if the model is gated)
+   - Optional persistence:
+     - PERSIST_SESSIONS=1
+     - SESSIONS_DB_PATH=/data/sessions.db (requires a disk)
+8) Persistent Disk (optional)
+   - Add a Disk (e.g., 1–5 GB) and mount it at /data if you enable SQLite persistence
+9) Create Web Service and wait for it to start
+10) Verify
+   - curl https://YOUR-SERVICE.onrender.com/health
+   - OpenAPI YAML: https://YOUR-SERVICE.onrender.com/openapi.yaml (served by [Python.function openapi_yaml](main.py:863))
+   - Chat endpoint: POST https://YOUR-SERVICE.onrender.com/v1/chat/completions (implemented in [Python.function chat_completions](main.py:891))
+
+Option B — Build directly from this GitHub repo (Dockerfile)
+1) In Render Dashboard: New → Web Service → Build from a Git repo (connect this repo)
+2) Render will detect the Dockerfile automatically (no Build Command needed)
+3) Advanced → Docker Build Args
+   - BACKEND=cpu  (ensures CPU-only torch wheel)
+4) Health and env vars
+   - Health Check Path: /health
+   - Set EAGER_LOAD_MODEL, MAX_TOKENS, HF_TOKEN as needed (same as Option A)
+5) (Optional) Add a Disk and mount at /data, then set SESSIONS_DB_PATH=/data/sessions.db if you want resumable SSE across restarts
+6) Deploy (first build can take a while due to the multi-GB model layer)
+
+Notes and limits on Render
+- GPU acceleration (NVIDIA/AMD) isn’t available for standard Web Services on Render; use the CPU image.
+- The image already contains the Qwen3-VL model under /app/hf-cache, so there’s no model download at runtime.
+- SSE is supported; streaming is produced by [Python.function chat_completions](main.py:891). Keep the connection open to avoid idle timeouts.
+- If you enable SQLite persistence, remember to attach a Disk; otherwise, the DB is ephemeral.
+
+Example render.yaml (optional IaC)
+If you prefer infrastructure-as-code, you can use a render.yaml like:
+
+services:
+  - type: web
+    name: qwen-vl-cpu
+    env: docker
+    image:
+      url: ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-cpu
+    plan: standard
+    region: oregon
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: EAGER_LOAD_MODEL
+        value: "1"
+      - key: MAX_TOKENS
+        value: "4096"
+      # - key: HF_TOKEN
+      #   sync: false  # set in dashboard or use Render secrets
+      # - key: PERSIST_SESSIONS
+      #   value: "1"
+      # - key: SESSIONS_DB_PATH
+      #   value: "/data/sessions.db"
+    disks:
+      # Uncomment if using persistence
+      # - name: data
+      #   mountPath: /data
+      #   sizeGB: 5
+
+After deploy:
+- Health: GET /health
+- OpenAPI: GET /openapi.yaml
+- Inference:
+  curl -X POST https://YOUR-SERVICE.onrender.com/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":128}"
+
+## Deploy on Hugging Face Spaces
+
+Recommended: Docker Space (works with our FastAPI app and preserves multimodal behavior). You can run CPU or GPU hardware. To persist the HF cache across restarts, enable Persistent Storage and point HF cache to /data.
+
+A) Create the Space (Docker)
+1) Install CLI and login:
+   pip install -U "huggingface_hub[cli]"
+   huggingface-cli login
+
+2) Create a Docker Space (public or private):
+   huggingface-cli repo create my-qwen3-vl-server --type space --sdk docker
+
+3) Add the Space as a remote and push this repo:
+   git remote add hf https://huggingface.co/spaces/YOUR_USERNAME/my-qwen3-vl-server
+   git push hf main
+
+This pushes Dockerfile, main.py, requirements.txt. The Space will auto-build your container.
+
+B) Configure Space settings
+- Hardware:
+  - CPU: works out-of-the-box (fast to build, slower inference).
+  - GPU: choose a GPU tier (e.g., T4/A10G/L4) for faster inference.
+
+- Persistent Storage (recommended):
+  - Enable Persistent storage (e.g., 10–30 GB).
+  - This lets you cache models and sessions across restarts.
+
+- Variables and Secrets:
+  - Variables:
+    - EAGER_LOAD_MODEL=1
+    - MAX_TOKENS=4096
+    - HF_HOME=/data/hf-cache
+    - TRANSFORMERS_CACHE=/data/hf-cache
+  - Secrets:
+    - HF_TOKEN=your_hf_token_if_model_is_gated
+
+C) CPU vs GPU on Spaces
+- CPU: No change needed. Our Dockerfile defaults to CPU PyTorch and bakes the model during build. It will run on CPU Spaces.
+- GPU: Edit the Space’s Dockerfile to switch the backend before the next build:
+  - In the file editor of the Space UI, change:
+      ARG BACKEND=cpu
+    to:
+      ARG BACKEND=nvidia
+  - Save/commit; the Space rebuilds with a CUDA-enabled torch. Choose a GPU hardware tier in the Space settings. Note: Building the GPU image pulls CUDA torch wheels and increases build time.
+- AMD ROCm is not available on Spaces; use NVIDIA GPUs on Spaces.
+
+D) Speed up cold starts and caching
+- With Persistent Storage enabled and HF_HOME/TRANSFORMERS_CACHE pointed to /data/hf-cache, the model cache persists across restarts (subsequent spins are much faster).
+- Keep the Space “Always on” if available on your plan to avoid cold starts.
+
+E) Space endpoints
+- Base URL: https://huggingface.co/spaces/YOUR_USERNAME/my-qwen3-vl-server (Spaces proxy to your container)
+- Health: GET /health (implemented by [Python.function health](main.py:871))
+- OpenAPI YAML: GET /openapi.yaml (implemented by [Python.openapi_yaml](main.py:863))
+- Chat Completions: POST /v1/chat/completions (non-stream + SSE) [Python.function chat_completions](main.py:891)
+- Cancel: POST /v1/cancel/{session_id} [Python.function cancel_session](main.py:1091)
+
+F) Quick test after the Space is “Running”
+- Health:
+  curl -s https://YOUR-SPACE-Subdomain.hf.space/health
+- Non-stream:
+  curl -s -X POST https://YOUR-SPACE-Subdomain.hf.space/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Hello from HF Spaces!\"}],\"max_tokens\":128}"
+- Streaming:
+  curl -N -H "Content-Type: application/json" \
+    -d "{\"messages\":[{\"role\":\"user\",\"content\":\"Think step by step: 17*23?\"}],\"stream\":true}" \
+    https://YOUR-SPACE-Subdomain.hf.space/v1/chat/completions
+
+Notes
+- The Space build step can appear “idle” after “Model downloaded.” while Docker commits a multi‑GB layer; this is expected.
+- If you hit OOM, increase the Space hardware memory or switch to a GPU tier. Reduce MAX_VIDEO_FRAMES and MAX_TOKENS if needed.

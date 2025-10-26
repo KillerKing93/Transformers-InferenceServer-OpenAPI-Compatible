@@ -23,11 +23,11 @@ import re
 import base64
 import tempfile
 import contextlib
-from typing import Any, Dict, List, Optional, Tuple, Deque
+from typing import Any, Dict, List, Optional, Tuple, Deque, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 from fastapi.responses import StreamingResponse, Response
 import json
@@ -330,12 +330,84 @@ def load_video_frames_from_any(src: Dict[str, Any], max_frames: int = MAX_VIDEO_
 
 
 class ChatRequest(BaseModel):
-    model: Optional[str] = None
-    messages: List[Dict[str, Any]]
-    max_tokens: Optional[int] = None
-    temperature: Optional[float] = None
-    stream: Optional[bool] = None
-    session_id: Optional[str] = None
+    """OpenAI-compatible Chat Completions request body."""
+    model: Optional[str] = Field(default=None, description="Model id (defaults to env MODEL_REPO_ID).")
+    messages: List[Dict[str, Any]] = Field(description="OpenAI-style messages array. Supports text, image_url/input_image, video_url/input_video parts.")
+    max_tokens: Optional[int] = Field(default=None, description="Max new tokens to generate.")
+    temperature: Optional[float] = Field(default=None, description="Sampling temperature.")
+    stream: Optional[bool] = Field(default=None, description="When true, returns Server-Sent Events stream.")
+    session_id: Optional[str] = Field(default=None, description="Optional session id for resumable SSE.")
+    # Pydantic v2 schema extras with rich examples
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "summary": "Text-only",
+                    "value": {
+                        "messages": [
+                            {"role": "user", "content": "Hello, summarize the benefits of multimodal LLMs."}
+                        ],
+                        "max_tokens": 128
+                    }
+                },
+                {
+                    "summary": "Image by URL",
+                    "value": {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "What is in this image?"},
+                                    {"type": "image_url", "image_url": {"url": "https://example.com/cat.jpg"}}
+                                ]
+                            }
+                        ],
+                        "max_tokens": 128
+                    }
+                },
+                {
+                    "summary": "Video by URL (streaming SSE)",
+                    "value": {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "Describe this clip briefly."},
+                                    {"type": "video_url", "video_url": {"url": "https://example.com/clip.mp4"}}
+                                ]
+                            }
+                        ],
+                        "stream": True,
+                        "max_tokens": 128
+                    }
+                }
+            ]
+        }
+    )
+
+class MessageModel(BaseModel):
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+class ChoiceModel(BaseModel):
+    index: int
+    message: MessageModel
+    finish_reason: Optional[str] = None
+
+class UsageModel(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+class ChatCompletionResponse(BaseModel):
+    """Non-streaming Chat Completions response (when stream=false)."""
+    id: str
+    object: str
+    created: int
+    model: str
+    choices: List[ChoiceModel]
+    usage: UsageModel
+    context: Dict[str, Any] = {}
 
 
 class Engine:
@@ -896,7 +968,27 @@ def health():
     return JSONResponse({"ok": True, "modelReady": ready, "modelId": model_id, "error": err, "context": ctx})
 
 
-@app.post("/v1/chat/completions", tags=["chat"])
+@app.post(
+    "/v1/chat/completions",
+    tags=["chat"],
+    response_model=ChatCompletionResponse,
+    responses={
+        200: {
+            "description": "When stream=true, the response is text/event-stream (SSE). When stream=false, JSON body matches ChatCompletionResponse.",
+            "content": {
+                "text/event-stream": {
+                    "schema": {"type": "string"},
+                    "examples": {
+                        "sse": {
+                            "summary": "SSE stream example",
+                            "value": "id: sess-123:0\ndata: {\"id\":\"sess-123\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n"
+                        }
+                    }
+                }
+            },
+        }
+    },
+)
 def chat_completions(request: Request, body: ChatRequest):
     # Ensure engine is loaded
     try:

@@ -18,26 +18,57 @@ Node.js artifacts and scripts from the previous project have been removed.
 
 ## Quick Start
 
-### Option 1: Run with Docker (Recommended)
+### Option 1: Run with Docker (with-model images: CPU / NVIDIA / AMD)
 
-1. Pull the pre-built image from GitHub Container Registry:
+Tags built by CI:
+- ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-cpu
+- ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-nvidia
+- ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-amd
 
-   ```bash
-   docker pull ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest
-   ```
+Pull:
 
-2. Run the container:
+```bash
+# CPU
+docker pull ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-cpu
 
-   ```bash
-   docker run -p 3000:3000 \
-     -e HF_TOKEN=your_hf_token_here \
-     ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest
-   ```
+# NVIDIA (CUDA 12.4 wheel)
+docker pull ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-nvidia
 
-3. Test the API:
-   ```bash
-   curl http://localhost:3000/health
-   ```
+# AMD (ROCm 6.2 wheel)
+docker pull ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-amd
+```
+
+Run:
+
+```bash
+# CPU
+docker run -p 3000:3000 \
+  -e HF_TOKEN=your_hf_token_here \
+  ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-cpu
+
+# NVIDIA GPU (requires NVIDIA drivers + nvidia-container-toolkit on the host)
+docker run --gpus all -p 3000:3000 \
+  -e HF_TOKEN=your_hf_token_here \
+  ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-nvidia
+
+# AMD GPU ROCm (requires ROCm 6.2+ drivers on the host; Linux only)
+# Map ROCm devices and video group (may vary by distro)
+docker run --device=/dev/kfd --device=/dev/dri --group-add video \
+  -p 3000:3000 \
+  -e HF_TOKEN=your_hf_token_here \
+  ghcr.io/killerking93/transformers-inferenceserver-openapi-compatible:latest-with-model-amd
+```
+
+Health check:
+```bash
+curl http://localhost:3000/health
+```
+
+Notes:
+- These are with-model images; the first pull is large. In CI, after "Model downloaded." BuildKit may appear idle while tarring/committing the multi‑GB layer.
+- Host requirements:
+  - NVIDIA: recent driver + nvidia-container-toolkit.
+  - AMD: ROCm 6.2+ driver stack, supported GPU, and mapped /dev/kfd and /dev/dri devices.
 
 ### Option 2: Run Locally
 

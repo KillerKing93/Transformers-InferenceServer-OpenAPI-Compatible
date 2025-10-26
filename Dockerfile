@@ -15,7 +15,23 @@ WORKDIR /app
 
 # Copy requirements first for better caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Backend selector: cpu | nvidia | amd
+ARG BACKEND=cpu
+ENV BACKEND=${BACKEND}
+ENV PIP_NO_CACHE_DIR=1
+
+# Install appropriate PyTorch for the selected backend, then the rest
+RUN if [ "$BACKEND" = "cpu" ]; then \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.9.0; \
+    elif [ "$BACKEND" = "nvidia" ]; then \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu124 torch==2.9.0; \
+    elif [ "$BACKEND" = "amd" ]; then \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/rocm6.2 torch==2.9.0; \
+    else \
+      echo "Unsupported BACKEND: $BACKEND" && exit 1; \
+    fi && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
 COPY main.py .

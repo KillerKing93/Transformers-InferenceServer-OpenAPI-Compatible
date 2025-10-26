@@ -18,10 +18,13 @@ COPY requirements.txt .
 
 # Backend selector: cpu | nvidia | amd
 ARG BACKEND=cpu
-# Pin torch versions per backend index (CUDA/ROCm indices currently publish up to 2.6.0)
+# Pin torch versions per backend index
+# - CPU index publishes newer (2.9.0 ok)
+# - CUDA cu124 index publishes up to 2.6.0 (auto-resolves to +cu124)
+# - ROCm 6.2 index publishes up to 2.5.1+rocm6.2 (must include local tag)
 ARG TORCH_VER_CPU=2.9.0
 ARG TORCH_VER_NVIDIA=2.6.0
-ARG TORCH_VER_AMD=2.6.0
+ARG TORCH_VER_AMD=2.5.1+rocm6.2
 
 ENV BACKEND=${BACKEND}
 ENV PIP_NO_CACHE_DIR=1
@@ -32,7 +35,7 @@ RUN if [ "$BACKEND" = "cpu" ]; then \
     elif [ "$BACKEND" = "nvidia" ]; then \
       pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu124 torch==${TORCH_VER_NVIDIA}; \
     elif [ "$BACKEND" = "amd" ]; then \
-      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/rocm6.2 torch==${TORCH_VER_AMD}; \
+      pip install --no-cache-dir --index-url https://download.pytorch.org/whl/rocm6.2 "torch==${TORCH_VER_AMD}"; \
     else \
       echo "Unsupported BACKEND: $BACKEND" && exit 1; \
     fi && \

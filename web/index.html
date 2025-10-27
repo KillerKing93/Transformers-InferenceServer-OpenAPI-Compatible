@@ -1,380 +1,1040 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Qwen3‑VL Chat (HF Space API)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root { --bg:#0f172a; --fg:#e2e8f0; --muted:#94a3b8; --accent:#6366f1; --card:#111827; --chip:#1f2937; --border:#334155; }
-    html, body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
-    .app { display:flex; flex-direction:column; height:100%; max-width: 1200px; margin: 0 auto; }
-    header { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
-    header .title { font-weight:700; }
-    header input[type="text"] { flex: 1 1 360px; background:var(--card); border:1px solid var(--border); color:var(--fg); padding:8px 10px; border-radius:6px; }
-    header .small { color: var(--muted); font-size: 12px; }
-    main { flex:1; overflow:auto; padding: 16px; display:flex; gap:16px; }
-    .chat { flex: 1 1 auto; display:flex; flex-direction:column; gap:12px; }
-    .msg { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px; }
-    .msg.user { border-left: 3px solid #22c55e; }
-    .msg.assistant { border-left: 3px solid var(--accent); }
-    .role { font-weight:700; margin-bottom:6px; color: var(--muted); text-transform: uppercase; font-size: 12px; }
-    .content pre { white-space: pre-wrap; word-break: break-word; }
-    .media { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
-    .media img, .media video { max-width: 240px; max-height: 180px; border:1px solid var(--border); border-radius:8px; }
-    .aside { width: 320px; flex: 0 0 auto; display:flex; flex-direction:column; gap:12px; }
-    .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px; }
-    .label { font-size: 12px; color: var(--muted); margin-bottom:6px; }
-    .row { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
-    .controls textarea { width:100%; min-height: 80px; background:var(--card); border:1px solid var(--border); color:var(--fg); padding:8px; border-radius:8px; resize: vertical; }
-    button { background:var(--accent); color:white; border:0; padding:8px 12px; border-radius:8px; cursor:pointer; }
-    button.secondary { background: var(--chip); color: var(--fg); }
-    input[type="number"], input[type="text"] { background:var(--card); border:1px solid var(--border); color:var(--fg); padding:6px 8px; border-radius:6px; }
-    .chips { display:flex; gap:8px; flex-wrap: wrap; }
-    .chip { background:var(--chip); color:var(--fg); border:1px solid var(--border); padding:4px 8px; border-radius: 999px; font-size: 12px; }
-    footer { padding:10px 16px; border-top:1px solid var(--border); color: var(--muted); font-size:12px; display:flex; justify-content:space-between; gap:10px; flex-wrap: wrap; }
-    a { color: #93c5fd; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .hint { font-size: 12px; color: var(--muted); }
-    input[type="file"] { display:none; }
-    .file-btn { background: var(--chip); }
-    .preview { display:flex; gap:8px; flex-wrap: wrap; margin-top:8px; }
-    .preview-item { position:relative; }
-    .remove { position:absolute; top:4px; right:4px; background: #ef4444; color:white; border:0; border-radius: 6px; padding:2px 6px; cursor:pointer; font-size:12px;}
-  </style>
-</head>
-<body>
-  <div class="app">
-    <header>
-      <div class="title">Qwen3‑VL Chat</div>
-      <input id="apiBase" type="text" placeholder="HF Space API Base, e.g. https://killerking93-transformers-inferenceserver-openapi.hf.space" />
-      <button id="saveBase" class="secondary">Save Base</button>
-      <span id="health" class="small">Health: checking…</span>
-    </header>
+  <head>
+    <meta charset="utf-8" />
+    <title>Qwen3‑VL Chat (HF Space API)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        --bg: #0f172a;
+        --fg: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #6366f1;
+        --card: #111827;
+        --chip: #1f2937;
+        --border: #334155;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
+          Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      }
+      .app {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      header .title {
+        font-weight: 700;
+      }
+      header input[type="text"] {
+        flex: 1 1 360px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        color: var(--fg);
+        padding: 8px 10px;
+        border-radius: 6px;
+      }
+      header .small {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      main {
+        flex: 1;
+        overflow: auto;
+        padding: 16px;
+        display: flex;
+        gap: 16px;
+      }
+      .chat {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .msg {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .msg.user {
+        border-left: 3px solid #22c55e;
+      }
+      .msg.assistant {
+        border-left: 3px solid var(--accent);
+      }
+      .role {
+        font-weight: 700;
+        margin-bottom: 6px;
+        color: var(--muted);
+        text-transform: uppercase;
+        font-size: 12px;
+      }
+      .content pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .media {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .media img,
+      .media video {
+        max-width: 240px;
+        max-height: 180px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      .aside {
+        width: 320px;
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .label {
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .controls textarea {
+        width: 100%;
+        min-height: 80px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        color: var(--fg);
+        padding: 8px;
+        border-radius: 8px;
+        resize: vertical;
+      }
+      button {
+        background: var(--accent);
+        color: white;
+        border: 0;
+        padding: 8px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: var(--chip);
+        color: var(--fg);
+      }
+      input[type="number"],
+      input[type="text"] {
+        background: var(--card);
+        border: 1px solid var(--border);
+        color: var(--fg);
+        padding: 6px 8px;
+        border-radius: 6px;
+      }
+      .chips {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .chip {
+        background: var(--chip);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+      }
+      footer {
+        padding: 10px 16px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 12px;
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      a {
+        color: #93c5fd;
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      input[type="file"] {
+        display: none;
+      }
+      .file-btn {
+        background: var(--chip);
+      }
+      .preview {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+      }
+      .preview-item {
+        position: relative;
+      }
+      .remove {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        background: #ef4444;
+        color: white;
+        border: 0;
+        border-radius: 6px;
+        padding: 2px 6px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <div class="title">Qwen3‑VL Chat</div>
+        <input
+          id="apiBase"
+          type="text"
+          placeholder="HF Space API Base, e.g. https://killerking93-transformers-inferenceserver-openapi.hf.space"
+        />
+        <button id="saveBase" class="secondary">Save Base</button>
+        <span id="health" class="small">Health: checking…</span>
+      </header>
 
-    <main>
-      <section class="chat" id="chat"></section>
+      <main>
+        <section class="chat" id="chat"></section>
 
-      <aside class="aside">
-        <div class="card">
-          <div class="label">Prompt</div>
-          <div class="controls">
-            <textarea id="prompt" placeholder="Ask anything… Supports images and videos."></textarea>
-            <div class="row">
-              <label for="file" class="file-btn button"><button class="secondary">Attach Image/Video</button></label>
-              <input id="file" type="file" accept="image/*,video/*" multiple />
-              <input id="maxTokens" type="number" min="1" max="8192" value="4096" title="Max tokens" />
-              <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.7" title="Temperature" />
-              <button id="send">Send (Stream)</button>
-            </div>
-            <div id="preview" class="preview"></div>
-            <div class="row" style="margin-top:8px;">
-              <button id="clearHistory" class="secondary">Clear History</button>
-              <span class="hint">Session <code id="sessionIdLabel"></code> — history saved locally</span>
+        <aside class="aside">
+          <div class="card">
+            <div class="label">Prompt</div>
+            <div class="controls">
+              <textarea
+                id="prompt"
+                placeholder="Ask anything… Supports images and videos."
+              ></textarea>
+              <div class="row">
+                <button id="attach" type="button" class="secondary">
+                  Attach Image/Video
+                </button>
+                <input
+                  id="file"
+                  type="file"
+                  accept="image/*,video/*"
+                  multiple
+                  style="display: none"
+                />
+                <input
+                  id="maxTokens"
+                  type="number"
+                  min="1"
+                  max="8192"
+                  value="4096"
+                  title="Max tokens"
+                />
+                <input
+                  id="temperature"
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value="0.7"
+                  title="Temperature"
+                />
+                <button id="send">Send (Stream)</button>
+              </div>
+              <div id="preview" class="preview"></div>
+              <div class="row" style="margin-top: 8px">
+                <button id="clearHistory" class="secondary">
+                  Clear History
+                </button>
+                <span class="hint"
+                  >Session <code id="sessionIdLabel"></code> — history saved
+                  locally</span
+                >
+              </div>
             </div>
           </div>
-        </div>
 
-        <div class="card">
-          <div class="label">Hints</div>
-          <div class="chips">
-            <div class="chip">Images: embedded as base64</div>
-            <div class="chip">Videos: base64, frame-sampled by server</div>
-            <div class="chip">SSE Streaming</div>
+          <div class="card">
+            <div class="label">Hints</div>
+            <div class="chips">
+              <div class="chip">Images: embedded as base64</div>
+              <div class="chip">Videos: base64, frame-sampled by server</div>
+              <div class="chip">SSE Streaming</div>
+            </div>
           </div>
+        </aside>
+      </main>
+
+      <footer>
+        <div>
+          Powered by FastAPI + Transformers (Qwen3‑VL). Calls public HF Space
+          API (no internal access).
         </div>
-      </aside>
-    </main>
+        <div>
+          <a href="./docs" target="_blank">Swagger</a> ·
+          <a href="./openapi.yaml" target="_blank">OpenAPI YAML</a>
+        </div>
+      </footer>
+    </div>
 
-    <footer>
-      <div>Powered by FastAPI + Transformers (Qwen3‑VL). Calls public HF Space API (no internal access).</div>
-      <div><a href="./docs" target="_blank">Swagger</a> · <a href="./openapi.yaml" target="_blank">OpenAPI YAML</a></div>
-    </footer>
-  </div>
+    <script>
+      // Config and state
+      const DEFAULT_SPACE =
+        "https://killerking93-transformers-inferenceserver-openapi.hf.space";
+      const qs = new URLSearchParams(location.search);
+      const apiBaseInput = document.getElementById("apiBase");
+      const saveBaseBtn = document.getElementById("saveBase");
+      const healthEl = document.getElementById("health");
+      const chatEl = document.getElementById("chat");
+      const promptEl = document.getElementById("prompt");
+      const fileEl = document.getElementById("file");
+      const previewEl = document.getElementById("preview");
+      const sendBtn = document.getElementById("send");
+      const clearBtn = document.getElementById("clearHistory");
+      const sessionIdLabel = document.getElementById("sessionIdLabel");
+      const maxTokensEl = document.getElementById("maxTokens");
+      const temperatureEl = document.getElementById("temperature");
+      const attachBtn = document.getElementById("attach");
 
-  <script>
-    // Config and state
-    const DEFAULT_SPACE = "https://killerking93-transformers-inferenceserver-openapi.hf.space";
-    const qs = new URLSearchParams(location.search);
-    const apiBaseInput = document.getElementById('apiBase');
-    const saveBaseBtn = document.getElementById('saveBase');
-    const healthEl = document.getElementById('health');
-    const chatEl = document.getElementById('chat');
-    const promptEl = document.getElementById('prompt');
-    const fileEl = document.getElementById('file');
-    const previewEl = document.getElementById('preview');
-    const sendBtn = document.getElementById('send');
-    const clearBtn = document.getElementById('clearHistory');
-    const sessionIdLabel = document.getElementById('sessionIdLabel');
-    const maxTokensEl = document.getElementById('maxTokens');
-    const temperatureEl = document.getElementById('temperature');
-
-    const store = {
-      get apiBase() { return localStorage.getItem('apiBase') || DEFAULT_SPACE; },
-      set apiBase(v) { localStorage.setItem('apiBase', v); },
-      get sessionId() {
-        let sid = localStorage.getItem('sessionId');
-        if (!sid) { sid = 'sess-' + Math.random().toString(16).slice(2, 10); localStorage.setItem('sessionId', sid); }
-        return sid;
-      },
-      get messages() {
-        const sid = this.sessionId;
-        try { return JSON.parse(localStorage.getItem(`chat:${sid}`) || '[]'); } catch { return []; }
-      },
-      set messages(arr) {
-        const sid = this.sessionId;
-        localStorage.setItem(`chat:${sid}`, JSON.stringify(arr));
-      },
-      clear() {
-        localStorage.removeItem(`chat:${this.sessionId}`);
-      }
-    };
-
-    apiBaseInput.value = qs.get('api') || store.apiBase;
-    sessionIdLabel.textContent = store.sessionId;
-
-    saveBaseBtn.onclick = () => {
-      const v = apiBaseInput.value.trim();
-      if (!/^https?:\/\//i.test(v)) { alert('Provide a valid API base (https://...)'); return; }
-      store.apiBase = v;
-      checkHealth();
-    };
-
-    async function checkHealth() {
-      healthEl.textContent = 'Health: checking…';
-      try {
-        const r = await fetch(new URL('/health', store.apiBase), { mode: 'cors' });
-        const j = await r.json();
-        healthEl.textContent = `Health: ${j.ok ? 'OK' : 'ERR'} · ModelReady=${j.modelReady ? 'yes' : 'no'} · Model=${j.modelId || 'unknown'}`;
-      } catch (e) {
-        healthEl.textContent = `Health: error (${e && e.message ? e.message : 'network'})`;
-      }
-    }
-
-    // UI helpers
-    function render() {
-      chatEl.innerHTML = '';
-      const messages = store.messages;
-      // Render messages grouped by role sequence
-      for (const msg of messages) {
-        const node = document.createElement('div');
-        node.className = `msg ${msg.role}`;
-        const role = document.createElement('div');
-        role.className = 'role';
-        role.textContent = msg.role;
-        node.appendChild(role);
-
-        const content = document.createElement('div');
-        content.className = 'content';
-        if (typeof msg.content === 'string') {
-          const pre = document.createElement('pre');
-          pre.textContent = msg.content;
-          content.appendChild(pre);
-        } else if (Array.isArray(msg.content)) {
-          const textParts = msg.content.filter(p => p.type === 'text');
-          for (const t of textParts) {
-            const pre = document.createElement('pre');
-            pre.textContent = t.text || '';
-            content.appendChild(pre);
+      const store = {
+        get apiBase() {
+          return localStorage.getItem("apiBase") || DEFAULT_SPACE;
+        },
+        set apiBase(v) {
+          localStorage.setItem("apiBase", v);
+        },
+        get sessionId() {
+          let sid = localStorage.getItem("sessionId");
+          if (!sid) {
+            sid = "sess-" + Math.random().toString(16).slice(2, 10);
+            localStorage.setItem("sessionId", sid);
           }
-          const media = document.createElement('div');
-          media.className = 'media';
-          for (const p of msg.content) {
-            if (p.type === 'input_image' || p.type === 'image_url') {
-              const img = document.createElement('img');
-              if (p.b64_json) {
-                img.src = p.b64_json.startsWith('data:') ? p.b64_json : ('data:image/*;base64,' + p.b64_json);
-              } else if (p.image_url && p.image_url.url) {
-                img.src = p.image_url.url;
-              }
-              media.appendChild(img);
-            } else if (p.type === 'input_video' || p.type === 'video_url') {
-              const video = document.createElement('video');
-              video.controls = true;
-              if (p.b64_json) {
-                video.src = p.b64_json.startsWith('data:') ? p.b64_json : ('data:video/mp4;base64,' + p.b64_json);
-              } else if (p.video_url && p.video_url.url) {
-                video.src = p.video_url.url;
-              }
-              media.appendChild(video);
-            }
+          return sid;
+        },
+        get messages() {
+          const sid = this.sessionId;
+          try {
+            return JSON.parse(localStorage.getItem(`chat:${sid}`) || "[]");
+          } catch {
+            return [];
           }
-          if (media.childElementCount) content.appendChild(media);
-        }
-        node.appendChild(content);
-        chatEl.appendChild(node);
-      }
-      chatEl.scrollTop = chatEl.scrollHeight;
-    }
-
-    // File handling
-    const fileQueue = [];
-    fileEl.addEventListener('change', async (e) => {
-      const files = Array.from(e.target.files || []);
-      for (const f of files) {
-        const b64 = await fileToDataURL(f);
-        fileQueue.push({ name: f.name, type: f.type, dataUrl: b64 });
-      }
-      renderPreview();
-      e.target.value = '';
-    });
-
-    function renderPreview() {
-      previewEl.innerHTML = '';
-      for (let i = 0; i < fileQueue.length; i++) {
-        const f = fileQueue[i];
-        const wrap = document.createElement('div');
-        wrap.className = 'preview-item';
-        const btn = document.createElement('button');
-        btn.className = 'remove';
-        btn.textContent = 'x';
-        btn.onclick = () => { fileQueue.splice(i, 1); renderPreview(); };
-        wrap.appendChild(btn);
-        if (f.type.startsWith('image/')) {
-          const img = document.createElement('img');
-          img.src = f.dataUrl;
-          img.style.maxWidth = '160px';
-          img.style.maxHeight = '120px';
-          wrap.appendChild(img);
-        } else if (f.type.startsWith('video/')) {
-          const video = document.createElement('video');
-          video.src = f.dataUrl;
-          video.controls = true;
-          video.style.maxWidth = '160px';
-          video.style.maxHeight = '120px';
-          wrap.appendChild(video);
-        } else {
-          const pre = document.createElement('pre');
-          pre.textContent = f.name;
-          wrap.appendChild(pre);
-        }
-        previewEl.appendChild(wrap);
-      }
-    }
-
-    function fileToDataURL(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
+        },
+        set messages(arr) {
+          const sid = this.sessionId;
+          try {
+            const compact = compactMessages(arr || []);
+            let serialized = JSON.stringify(compact);
+            const LIMIT = 4.5 * 1024 * 1024; // ~4.5MB safety window below localStorage quota
+    // Create small image thumbnail (JPEG) for compact storage and chat display
+    async function createImageThumbnail(dataUrl, maxW = 320, maxH = 240, quality = 0.7) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const ratio = Math.min(maxW / img.width, maxH / img.height, 1);
+            const w = Math.max(1, Math.round(img.width * ratio));
+            const h = Math.max(1, Math.round(img.height * ratio));
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', quality));
+          } catch {
+            resolve(null);
+          }
+        };
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
       });
     }
 
-    function dataUrlToBase64(d) {
-      return d.includes('base64,') ? d.split('base64,')[1] : d;
-    }
+    // Create a poster thumbnail from the first video frame (best-effort)
+    async function createVideoThumbnail(dataUrl, maxW = 320, maxH = 240, quality = 0.6) {
+      return new Promise((resolve) => {
+        let settled = false;
+        const settle = (v) => { if (!settled) { settled = true; resolve(v); } };
 
-    // Build OpenAI-style messages array from stored history (already in that shape)
-    function getMessages() {
-      return store.messages;
-    }
+        const video = document.createElement('video');
+        video.preload = 'auto';
+        video.muted = true;
+        video.playsInline = true;
+        video.src = dataUrl;
 
-    function pushUserMessageFromUI() {
-      const msg = { role: 'user', content: [] };
-      const text = (promptEl.value || '').trim();
-      if (text) msg.content.push({ type: 'text', text });
-      for (const f of fileQueue) {
-        if (f.type.startsWith('image/')) {
-          msg.content.push({ type: 'input_image', b64_json: dataUrlToBase64(f.dataUrl) });
-        } else if (f.type.startsWith('video/')) {
-          msg.content.push({ type: 'input_video', b64_json: dataUrlToBase64(f.dataUrl) });
-        }
-      }
-      const messages = getMessages();
-      messages.push(msg);
-      store.messages = messages;
-      // clear UI queue
-      fileQueue.splice(0, fileQueue.length);
-      previewEl.innerHTML = '';
-      promptEl.value = '';
-      render();
-    }
+        const onReady = () => {
+          try {
+            const vw = Math.max(1, video.videoWidth || 1);
+            const vh = Math.max(1, video.videoHeight || 1);
+            const ratio = Math.min(maxW / vw, maxH / vh, 1);
+            const w = Math.max(1, Math.round(vw * ratio));
+            const h = Math.max(1, Math.round(vh * ratio));
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, w, h);
+            settle(canvas.toDataURL('image/jpeg', quality));
+          } catch {
+            settle(null);
+          } finally {
+            try { video.pause(); } catch {}
+            video.src = '';
+          }
+        };
 
-    async function sendStream() {
-      const apiBase = apiBaseInput.value.trim() || DEFAULT_SPACE;
-      const body = {
-        messages: getMessages(),
-        stream: true,
-        session_id: store.sessionId,
-        max_tokens: Math.max(1, parseInt(maxTokensEl.value || '4096', 10)),
-        temperature: parseFloat(temperatureEl.value || '0.7'),
+        video.addEventListener('loadeddata', onReady, { once: true });
+        video.addEventListener('error', () => settle(null), { once: true });
+        // Fallback timeout in case metadata never fires
+        setTimeout(() => settle(null), 3000);
+      });
+    }
+            while (serialized.length > LIMIT && compact.length > 1) {
+              compact.shift(); // drop oldest message
+              serialized = JSON.stringify(compact);
+            }
+            localStorage.setItem(`chat:${sid}`, serialized);
+          } catch (e) {
+            console.warn(
+              "Persist messages failed, clearing oldest/history may be truncated:",
+              e
+            );
+            try {
+              localStorage.removeItem(`chat:${sid}`);
+            } catch {}
+          }
+        },
+        clear() {
+          // Remove current chat history and rotate to a brand new session
+          const sid = localStorage.getItem("sessionId");
+          if (sid) {
+            localStorage.removeItem(`chat:${sid}`);
+          }
+          // Drop session id so next access generates a fresh one
+          localStorage.removeItem("sessionId");
+        },
       };
 
-      const url = new URL('/v1/chat/completions', apiBase);
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        mode: 'cors',
-      });
-      if (!resp.ok || !resp.body) {
-        const text = await resp.text().catch(() => '');
-        throw new Error(`HTTP ${resp.status}: ${text}`);
-      }
-      // Prepare assistant message to accumulate streamed content
-      const messages = getMessages();
-      const asst = { role: 'assistant', content: '' };
-      messages.push(asst);
-      store.messages = messages;
-      render();
+      apiBaseInput.value = qs.get("api") || store.apiBase;
+      sessionIdLabel.textContent = store.sessionId;
 
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // split SSE blocks
-        let idx;
-        while ((idx = buffer.indexOf('\n\n')) !== -1) {
-          const block = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
-          const lines = block.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data:')) {
-              const data = line.slice(5).trim();
-              if (data === '[DONE]') continue;
+      saveBaseBtn.onclick = () => {
+        const v = apiBaseInput.value.trim();
+        if (!/^https?:\/\//i.test(v)) {
+          alert("Provide a valid API base (https://...)");
+          return;
+        }
+        store.apiBase = v;
+        checkHealth();
+      };
+
+      async function checkHealth() {
+        healthEl.textContent = "Health: checking…";
+        try {
+          const r = await fetch(new URL("/health", store.apiBase), {
+            mode: "cors",
+          });
+          const j = await r.json();
+          healthEl.textContent = `Health: ${j.ok ? "OK" : "ERR"} · ModelReady=${
+            j.modelReady ? "yes" : "no"
+          } · Model=${j.modelId || "unknown"}`;
+        } catch (e) {
+          healthEl.textContent = `Health: error (${
+            e && e.message ? e.message : "network"
+          })`;
+        }
+      }
+
+      // UI helpers
+      function renderAssistantText(text) {
+        const frag = document.createDocumentFragment();
+        if (typeof text !== "string" || !text.length) {
+          const pre = document.createElement("pre");
+          pre.textContent = text || "";
+          frag.appendChild(pre);
+          return frag;
+        }
+        const re = /<think>([\s\S]*?)<\/think>/gi;
+        let last = 0;
+        let m;
+        while ((m = re.exec(text)) !== null) {
+          const before = text.slice(last, m.index);
+          if (before) {
+            const pre = document.createElement("pre");
+            pre.textContent = before;
+            frag.appendChild(pre);
+          }
+          const det = document.createElement("details");
+          const sum = document.createElement("summary");
+          sum.textContent = "Show reasoning";
+          det.appendChild(sum);
+          const pre2 = document.createElement("pre");
+          pre2.textContent = m[1];
+          det.appendChild(pre2);
+          frag.appendChild(det);
+          last = m.index + m[0].length;
+        }
+        const after = text.slice(last);
+        if (after) {
+          const pre = document.createElement("pre");
+          pre.textContent = after;
+          frag.appendChild(pre);
+        }
+        if (!frag.childNodes.length) {
+          const pre = document.createElement("pre");
+          pre.textContent = text;
+          frag.appendChild(pre);
+        }
+        return frag;
+      }
+
+      function render() {
+        chatEl.innerHTML = "";
+        const messages = store.messages;
+        // Render messages grouped by role sequence
+        for (const msg of messages) {
+          const node = document.createElement("div");
+          node.className = `msg ${msg.role}`;
+          const role = document.createElement("div");
+          role.className = "role";
+          role.textContent = msg.role;
+          node.appendChild(role);
+
+          const content = document.createElement("div");
+          content.className = "content";
+          if (typeof msg.content === "string") {
+            content.appendChild(renderAssistantText(msg.content));
+          } else if (Array.isArray(msg.content)) {
+            const textParts = msg.content.filter((p) => p.type === "text");
+            for (const t of textParts) {
+              const pre = document.createElement("pre");
+              pre.textContent = t.text || "";
+              content.appendChild(pre);
+            }
+            const media = document.createElement("div");
+            media.className = "media";
+            for (const p of msg.content) {
+              if (p.type === "input_image" || p.type === "image_url") {
+                const img = document.createElement("img");
+                if (p.b64_json) {
+                  img.src = p.b64_json.startsWith("data:")
+                    ? p.b64_json
+                    : "data:image/*;base64," + p.b64_json;
+                } else if (p.image_url && p.image_url.url) {
+                  img.src = p.image_url.url;
+                }
+                media.appendChild(img);
+              } else if (p.type === "input_video" || p.type === "video_url") {
+                const video = document.createElement("video");
+                video.controls = true;
+                if (p.b64_json) {
+                  video.src = p.b64_json.startsWith("data:")
+                    ? p.b64_json
+                    : "data:video/mp4;base64," + p.b64_json;
+                } else if (p.video_url && p.video_url.url) {
+                  video.src = p.video_url.url;
+                }
+                media.appendChild(video);
+              } else if (p.type === "image_thumb" && p.dataUrl) {
+                const img = document.createElement("img");
+                img.src = p.dataUrl;
+                media.appendChild(img);
+              } else if (p.type === "video_thumb" && p.dataUrl) {
+                const img = document.createElement("img");
+                img.src = p.dataUrl; // poster-like thumbnail
+                media.appendChild(img);
+              } else if (p.type === "image_ref") {
+                const chip = document.createElement("div");
+                chip.className = "chip";
+                chip.textContent = `Image (${p.name || "ref"})`;
+                media.appendChild(chip);
+              } else if (p.type === "video_ref") {
+                const chip = document.createElement("div");
+                chip.className = "chip";
+                chip.textContent = `Video (${p.name || "ref"})`;
+                media.appendChild(chip);
+              }
+            }
+            if (media.childElementCount) content.appendChild(media);
+          }
+          node.appendChild(content);
+          chatEl.appendChild(node);
+        }
+        chatEl.scrollTop = chatEl.scrollHeight;
+      }
+
+      // File handling
+      const fileQueue = [];
+      function handleFileList(files) {
+        const arr = Array.from(files || []);
+        return Promise.all(
+          arr.map(async (f) => {
+            const b64 = await fileToDataURL(f);
+            fileQueue.push({ name: f.name, type: f.type, dataUrl: b64 });
+          })
+        ).then(() => {
+          renderPreview();
+        });
+      }
+      // Button triggers native picker
+      if (attachBtn) attachBtn.addEventListener("click", () => fileEl.click());
+      // Native input change
+      fileEl.addEventListener("change", async (e) => {
+        await handleFileList(e.target.files);
+        e.target.value = "";
+      });
+      // Drag & drop onto preview area
+      previewEl.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      });
+      previewEl.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        await handleFileList(e.dataTransfer.files);
+      });
+      // Paste from clipboard (images/videos)
+      document.addEventListener("paste", async (e) => {
+        if (
+          e.clipboardData &&
+          e.clipboardData.files &&
+          e.clipboardData.files.length
+        ) {
+          await handleFileList(e.clipboardData.files);
+        }
+      });
+
+      function renderPreview() {
+        previewEl.innerHTML = "";
+        for (let i = 0; i < fileQueue.length; i++) {
+          const f = fileQueue[i];
+          const wrap = document.createElement("div");
+          wrap.className = "preview-item";
+          const btn = document.createElement("button");
+          btn.className = "remove";
+          btn.textContent = "x";
+          btn.onclick = () => {
+            fileQueue.splice(i, 1);
+            renderPreview();
+          };
+          wrap.appendChild(btn);
+          if (f.type.startsWith("image/")) {
+            const img = document.createElement("img");
+            img.src = f.dataUrl;
+            img.style.maxWidth = "160px";
+            img.style.maxHeight = "120px";
+            wrap.appendChild(img);
+          } else if (f.type.startsWith("video/")) {
+            const video = document.createElement("video");
+            video.src = f.dataUrl;
+            video.controls = true;
+            video.style.maxWidth = "160px";
+            video.style.maxHeight = "120px";
+            wrap.appendChild(video);
+          } else {
+            const pre = document.createElement("pre");
+            pre.textContent = f.name;
+            wrap.appendChild(pre);
+          }
+          previewEl.appendChild(wrap);
+        }
+      }
+
+      function fileToDataURL(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      }
+
+      function dataUrlToBase64(d) {
+        return d.includes("base64,") ? d.split("base64,")[1] : d;
+      }
+
+      // Create small image thumbnail data URL (JPEG) for compact storage and UI display
+      async function createImageThumbnail(
+        dataUrl,
+        maxW = 320,
+        maxH = 240,
+        quality = 0.7
+      ) {
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            try {
+              const ratio = Math.min(maxW / img.width, maxH / img.height, 1);
+              const w = Math.max(1, Math.round(img.width * ratio));
+              const h = Math.max(1, Math.round(img.height * ratio));
+              const canvas = document.createElement("canvas");
+              canvas.width = w;
+              canvas.height = h;
+              const ctx = canvas.getContext("2d");
+              ctx.drawImage(img, 0, 0, w, h);
+              resolve(canvas.toDataURL("image/jpeg", quality));
+            } catch {
+              resolve(null);
+            }
+          };
+          img.onerror = () => resolve(null);
+          img.src = dataUrl;
+        });
+      }
+
+      // Create a poster thumbnail from the first video frame
+      async function createVideoThumbnail(
+        dataUrl,
+        maxW = 320,
+        maxH = 240,
+        quality = 0.6
+      ) {
+        return new Promise((resolve) => {
+          let settled = false;
+          const settle = (v) => {
+            if (!settled) {
+              settled = true;
+              resolve(v);
+            }
+          };
+
+          const video = document.createElement("video");
+          video.preload = "auto";
+          video.muted = true;
+          video.playsInline = true;
+          video.src = dataUrl;
+
+          const onReady = () => {
+            try {
+              const vw = Math.max(1, video.videoWidth || 1);
+              const vh = Math.max(1, video.videoHeight || 1);
+              const ratio = Math.min(maxW / vw, maxH / vh, 1);
+              const w = Math.max(1, Math.round(vw * ratio));
+              const h = Math.max(1, Math.round(vh * ratio));
+              const canvas = document.createElement("canvas");
+              canvas.width = w;
+              canvas.height = h;
+              const ctx = canvas.getContext("2d");
+              ctx.drawImage(video, 0, 0, w, h);
+              settle(canvas.toDataURL("image/jpeg", quality));
+            } catch {
+              settle(null);
+            } finally {
               try {
-                const j = JSON.parse(data);
-                const delta = (((j || {}).choices || [])[0] || {}).delta || {};
-                if (typeof delta.content === 'string' && delta.content.length) {
-                  // append token
-                  const msgs = getMessages();
-                  const last = msgs[msgs.length - 1];
-                  if (last && last.role === 'assistant') {
-                    last.content = (last.content || '') + delta.content;
-                    store.messages = msgs;
-                    render();
+                video.pause();
+              } catch {}
+              video.src = "";
+            }
+          };
+
+          video.addEventListener("loadeddata", onReady, { once: true });
+          video.addEventListener("error", () => settle(null), { once: true });
+          setTimeout(() => settle(null), 3000);
+        });
+      }
+
+      // Compact messages for storage: strip large binary fields to avoid localStorage quota overflow.
+      function compactMessages(arr) {
+        const out = [];
+        for (const m of arr || []) {
+          const c = Array.isArray(m.content)
+            ? m.content.map((p) => {
+                if (p && typeof p === "object") {
+                  // Remove huge base64 payloads from persisted history; keep lightweight placeholders only.
+                  if (p.type === "input_image" && p.b64_json) {
+                    return {
+                      type: "image_ref",
+                      name: p.name || "image",
+                      mime: "image/*",
+                    };
+                  }
+                  if (p.type === "input_video" && p.b64_json) {
+                    return {
+                      type: "video_ref",
+                      name: p.name || "video",
+                      mime: "video/*",
+                    };
                   }
                 }
-              } catch {}
+                // Keep text and URL references as-is
+                return p;
+              })
+            : m.content;
+          out.push({ role: m.role, content: c });
+        }
+        return out;
+      }
+
+      // Transform persisted messages to a request-safe form (text + URL refs only).
+      function transformForSend(arr) {
+        const out = [];
+        for (const m of arr || []) {
+          if (
+            m &&
+            (m.role === "user" || m.role === "assistant" || m.role === "system")
+          ) {
+            const entry = { role: m.role, content: [] };
+            if (typeof m.content === "string") {
+              entry.content.push({ type: "text", text: m.content });
+            } else if (Array.isArray(m.content)) {
+              for (const p of m.content) {
+                if (!p || typeof p !== "object") continue;
+                if (p.type === "text" && typeof p.text === "string") {
+                  entry.content.push({ type: "text", text: p.text });
+                } else if (
+                  p.type === "image_url" &&
+                  p.image_url &&
+                  p.image_url.url
+                ) {
+                  entry.content.push({
+                    type: "image_url",
+                    image_url: { url: p.image_url.url },
+                  });
+                } else if (
+                  p.type === "video_url" &&
+                  p.video_url &&
+                  p.video_url.url
+                ) {
+                  entry.content.push({
+                    type: "video_url",
+                    video_url: { url: p.video_url.url },
+                  });
+                }
+                // Skip image_ref/video_ref/image_thumb/video_thumb when sending; only the current turn will include base64
+              }
+            }
+            out.push(entry);
+          }
+        }
+        // Limit history window to avoid stale over-conditioning and ghosting
+        const SEND_MAX_MESSAGES = 24; // ~12 turns
+        if (out.length > SEND_MAX_MESSAGES) {
+          return out.slice(out.length - SEND_MAX_MESSAGES);
+        }
+        return out;
+      }
+
+      // Holds the most recent outgoing user message with real base64 attachments (not persisted)
+      let lastOutgoingUser = null;
+
+      // Build OpenAI-style messages array from stored history (already in that shape)
+      function getMessages() {
+        return store.messages;
+      }
+
+      async function pushUserMessageFromUI() {
+        // Build two versions:
+        // 1) storedMsg: safe for localStorage (no huge base64) but visually rich using thumbnails
+        // 2) outgoingMsg: includes real base64 attachments for the current turn
+        const storedMsg = { role: "user", content: [] };
+        const outgoingMsg = { role: "user", content: [] };
+
+        const text = (promptEl.value || "").trim();
+        if (text) {
+          storedMsg.content.push({ type: "text", text });
+          outgoingMsg.content.push({ type: "text", text });
+        }
+
+        for (const f of fileQueue) {
+          if (f.type.startsWith("image/")) {
+            outgoingMsg.content.push({
+              type: "input_image",
+              b64_json: dataUrlToBase64(f.dataUrl),
+              name: f.name || "image",
+            });
+            const thumb = await createImageThumbnail(f.dataUrl);
+            if (thumb) {
+              storedMsg.content.push({
+                type: "image_thumb",
+                dataUrl: thumb,
+                name: f.name || "image",
+              });
+            } else {
+              storedMsg.content.push({
+                type: "image_ref",
+                name: f.name || "image",
+                mime: f.type || "image/*",
+              });
+            }
+          } else if (f.type.startsWith("video/")) {
+            outgoingMsg.content.push({
+              type: "input_video",
+              b64_json: dataUrlToBase64(f.dataUrl),
+              name: f.name || "video",
+            });
+            const vthumb = await createVideoThumbnail(f.dataUrl);
+            if (vthumb) {
+              storedMsg.content.push({
+                type: "video_thumb",
+                dataUrl: vthumb,
+                name: f.name || "video",
+              });
+            } else {
+              storedMsg.content.push({
+                type: "video_ref",
+                name: f.name || "video",
+                mime: f.type || "video/*",
+              });
+            }
+          }
+        }
+
+        const messages = getMessages();
+        messages.push(storedMsg);
+        store.messages = messages;
+
+        // Stash the real payload for the immediate request
+        lastOutgoingUser = outgoingMsg;
+
+        // clear UI queue
+        fileQueue.splice(0, fileQueue.length);
+        previewEl.innerHTML = "";
+        promptEl.value = "";
+        render();
+      }
+
+      async function sendStream() {
+        const apiBase = apiBaseInput.value.trim() || DEFAULT_SPACE;
+
+        // Build request messages: text history + replace last user turn with real attachments if available
+        let msgs = transformForSend(getMessages());
+        if (lastOutgoingUser) {
+          if (msgs.length && msgs[msgs.length - 1].role === "user") {
+            msgs[msgs.length - 1] = lastOutgoingUser;
+          } else {
+            msgs.push(lastOutgoingUser);
+          }
+        }
+        // Clear the stash to avoid accidental reuse
+        lastOutgoingUser = null;
+
+        const body = {
+          messages: msgs,
+          stream: true,
+          session_id: store.sessionId,
+          max_tokens: Math.max(1, parseInt(maxTokensEl.value || "4096", 10)),
+          temperature: parseFloat(temperatureEl.value || "0.7"),
+        };
+
+        const url = new URL("/v1/chat/completions", apiBase);
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          mode: "cors",
+        });
+        if (!resp.ok || !resp.body) {
+          const text = await resp.text().catch(() => "");
+          throw new Error(`HTTP ${resp.status}: ${text}`);
+        }
+        // Prepare assistant message to accumulate streamed content
+        const messages = getMessages();
+        const asst = { role: "assistant", content: "" };
+        messages.push(asst);
+        store.messages = messages;
+        render();
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // split SSE blocks
+          let idx;
+          while ((idx = buffer.indexOf("\n\n")) !== -1) {
+            const block = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            const lines = block.split("\n");
+            for (const line of lines) {
+              if (line.startsWith("data:")) {
+                const data = line.slice(5).trim();
+                if (data === "[DONE]") continue;
+                try {
+                  const j = JSON.parse(data);
+                  const delta =
+                    (((j || {}).choices || [])[0] || {}).delta || {};
+                  if (
+                    typeof delta.content === "string" &&
+                    delta.content.length
+                  ) {
+                    // append token
+                    const msgs = getMessages();
+                    const last = msgs[msgs.length - 1];
+                    if (last && last.role === "assistant") {
+                      last.content = (last.content || "") + delta.content;
+                      store.messages = msgs;
+                      render();
+                    }
+                  }
+                } catch {}
+              }
             }
           }
         }
       }
-    }
 
-    sendBtn.onclick = async () => {
-      try {
-        pushUserMessageFromUI();
-        await sendStream();
-      } catch (e) {
-        alert('Send failed: ' + (e && e.message ? e.message : e));
-      }
-    };
+      sendBtn.onclick = async () => {
+        try {
+          await pushUserMessageFromUI();
+          await sendStream();
+        } catch (e) {
+          alert("Send failed: " + (e && e.message ? e.message : e));
+        }
+      };
 
-    clearBtn.onclick = () => {
-      if (confirm('Clear chat history for this session?')) {
-        store.clear(); render();
-      }
-    };
+      clearBtn.onclick = () => {
+        if (confirm("Clear chat history and start a new session?")) {
+          store.clear();
+          // Reset UI state
+          fileQueue.splice(0, fileQueue.length);
+          previewEl.innerHTML = "";
+          promptEl.value = "";
+          // Force a new session id (getter will create it) and update label
+          sessionIdLabel.textContent = store.sessionId;
+          render();
+        }
+      };
 
-    (async function init() {
-      render();
-      await checkHealth();
-      // Auto-save default base on first load if empty
-      if (!localStorage.getItem('apiBase')) localStorage.setItem('apiBase', apiBaseInput.value.trim() || DEFAULT_SPACE);
-    })();
-  </script>
-</body>
+      (async function init() {
+        render();
+        await checkHealth();
+        // Auto-save default base on first load if empty
+        if (!localStorage.getItem("apiBase"))
+          localStorage.setItem(
+            "apiBase",
+            apiBaseInput.value.trim() || DEFAULT_SPACE
+          );
+      })();
+    </script>
+  </body>
 </html>

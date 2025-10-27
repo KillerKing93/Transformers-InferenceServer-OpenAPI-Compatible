@@ -433,15 +433,34 @@ class Engine:
         except Exception:
             AutoModelForImageTextToText = None  # type: ignore
 
+        # Resolve device map to avoid 'meta' device on CPU Spaces
+        # If DEVICE_MAP is "auto" but no CUDA is available, force "cpu" and disable low_cpu_mem_usage
         model_kwargs: Dict[str, Any] = {
             "trust_remote_code": True,
         }
         if hf_token:
             # Only pass 'token' (use_auth_token is deprecated and causes conflicts)
             model_kwargs["token"] = hf_token
-        # Device and dtype
-        model_kwargs["device_map"] = DEVICE_MAP
+
+        # Device and dtype resolution
+        try:
+            import torch  # local import to avoid heavy import at module load
+            has_cuda = bool(getattr(torch, "cuda", None) and torch.cuda.is_available())
+        except Exception:
+            has_cuda = False
+
+        resolved_device_map = DEVICE_MAP
+        if str(DEVICE_MAP).lower() == "auto" and not has_cuda:
+            resolved_device_map = "cpu"
+
+        model_kwargs["device_map"] = resolved_device_map
+        # Explicitly disable low_cpu_mem_usage on pure CPU to fully materialize weights (avoids meta tensors)
+        if resolved_device_map == "cpu":
+            model_kwargs["low_cpu_mem_usage"] = False
+        # dtype
         model_kwargs["torch_dtype"] = TORCH_DTYPE if TORCH_DTYPE != "auto" else "auto"
+        # store for later
+        self._resolved_device_map = resolved_device_map
 
         # Processor (handles text + images/videos)
         proc_kwargs: Dict[str, Any] = {"trust_remote_code": True}
@@ -473,6 +492,18 @@ class Engine:
             # Generic AutoModel as last-resort with trust_remote_code to load custom architectures
             model = AutoModel.from_pretrained(model_id, **model_kwargs)  # pragma: no cover
         self.model = model.eval()  # pragma: no cover
+        # Ensure model is fully on CPU when resolved device_map is cpu (prevents meta device mix during inference)
+        try:
+            if str(getattr(self, "_resolved_device_map", "")).lower() == "cpu":
+                _ = self.model.to("cpu")
+        except Exception:
+            pass
+        # Ensure model is on CPU when resolved device_map is cpu (prevents meta device mix during inference)
+        try:
+            if getattr(self, "_resolved_device_map", None) == "cpu":
+                _ = self.model.to("cpu")
+        except Exception:
+            pass
 
         self.model_id = model_id
         self.tokenizer = getattr(self.processor, "tokenizer", None)
@@ -665,22 +696,40 @@ class Engine:
             proc_kwargs["videos"] = videos
 
         inputs = self.processor(**proc_kwargs)
-        # Move tensors to model device if present
+        # Move tensors to the correct device
         try:
-            device = getattr(self.model, "device", None) or next(self.model.parameters()).device
-            inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+            if str(getattr(self, "_resolved_device_map", "")).lower() == "cpu":
+                # Explicit CPU placement avoids 'meta' device errors on Spaces
+                inputs = {k: (v.to("cpu") if hasattr(v, "to") else v) for k, v in inputs.items()}
+            else:
+                device = getattr(self.model, "device", None) or next(self.model.parameters()).device
+                inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
         except Exception:
             pass
 
         do_sample = temperature is not None and float(temperature) > 0.0
 
-        gen_ids = self.model.generate(
-            **inputs,
-            max_new_tokens=int(max_tokens),
-            temperature=float(temperature),
-            do_sample=do_sample,
-            use_cache=True,
-        )
+        # Safer on CPU: run without gradients to reduce memory pressure and avoid autograd hooks
+        try:
+            import torch
+            with torch.no_grad():
+                gen_ids = self.model.generate(
+                    **inputs,
+                    max_new_tokens=int(max_tokens),
+                    temperature=float(temperature),
+                    do_sample=do_sample,
+                    use_cache=True,
+                )
+        except Exception:
+            # Fallback without no_grad if torch import fails (very unlikely)
+            gen_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=int(max_tokens),
+                temperature=float(temperature),
+                do_sample=do_sample,
+                use_cache=True,
+            )
+
         # Decode
         output = self.processor.batch_decode(
             gen_ids,
@@ -722,8 +771,11 @@ class Engine:
 
         inputs = self.processor(**proc_kwargs)
         try:
-            device = getattr(self.model, "device", None) or next(self.model.parameters()).device
-            inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+            if str(getattr(self, "_resolved_device_map", "")).lower() == "cpu":
+                inputs = {k: (v.to("cpu") if hasattr(v, "to") else v) for k, v in inputs.items()}
+            else:
+                device = getattr(self.model, "device", None) or next(self.model.parameters()).device
+                inputs = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
         except Exception:
             pass
 
@@ -755,7 +807,17 @@ class Engine:
 
             gen_kwargs["stopping_criteria"] = StoppingCriteriaList([_CancelCrit(cancel_event)])
 
-        th = threading.Thread(target=self.model.generate, kwargs=gen_kwargs)
+        # Wrap generation with torch.no_grad() to avoid autograd overhead on CPU and reduce failure surface
+        def _runner():
+            try:
+                import torch
+                with torch.no_grad():
+                    self.model.generate(**gen_kwargs)
+            except Exception:
+                # Let streamer finish gracefully even if generation throws
+                pass
+
+        th = threading.Thread(target=_runner)
         th.start()
 
         for piece in streamer:
@@ -1114,9 +1176,10 @@ def chat_completions(
                     pass
                 sess.cancel_timer = None
 
-            # Replay if Last-Event-ID was provided
-            replay_from = last_idx_from_header if sid_from_header == session_id else -1
-            if replay_from >= -1:
+            # Replay only when a valid Last-Event-ID is provided for this same session
+            do_replay = bool(sid_from_header) and (sid_from_header == session_id)
+            if do_replay:
+                replay_from = last_idx_from_header
                 # First try in-memory buffer
                 for idx, block in list(sess.buffer):
                     if idx > replay_from:

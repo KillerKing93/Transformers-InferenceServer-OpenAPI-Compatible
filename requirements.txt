@@ -6,6 +6,7 @@ python-multipart>=0.0.6
 # HF ecosystem
 transformers>=4.44.0
 accelerate>=0.33.0
+bitsandbytes>=0.43.0
 
 # Multimedia + utils
 pillow>=10.0.0

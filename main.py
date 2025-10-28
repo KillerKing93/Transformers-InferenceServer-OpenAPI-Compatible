@@ -79,6 +79,12 @@ MAX_VIDEO_FRAMES = int(os.getenv("MAX_VIDEO_FRAMES", "16"))
 DEVICE_MAP = os.getenv("DEVICE_MAP", "auto")
 TORCH_DTYPE = os.getenv("TORCH_DTYPE", "auto")
 
+# Quantization config (BitsAndBytes)
+LOAD_IN_4BIT = str(os.getenv("LOAD_IN_4BIT", "1")).lower() in ("1", "true", "yes", "y")
+BNB_4BIT_COMPUTE_DTYPE = os.getenv("BNB_4BIT_COMPUTE_DTYPE", "float16")
+BNB_4BIT_USE_DOUBLE_QUANT = str(os.getenv("BNB_4BIT_USE_DOUBLE_QUANT", "1")).lower() in ("1", "true", "yes", "y")
+BNB_4BIT_QUANT_TYPE = os.getenv("BNB_4BIT_QUANT_TYPE", "nf4")
+
 # Persistent session store (SQLite)
 PERSIST_SESSIONS = str(os.getenv("PERSIST_SESSIONS", "0")).lower() in ("1", "true", "yes", "y")
 SESSIONS_DB_PATH = os.getenv("SESSIONS_DB_PATH", "sessions.db")
@@ -426,7 +432,7 @@ class CancelResponse(BaseModel):
 class Engine:
     def __init__(self, model_id: str, hf_token: Optional[str] = None):
         # Lazy import heavy deps
-        from transformers import AutoProcessor, AutoModelForCausalLM, AutoModelForVision2Seq, AutoModel
+        from transformers import AutoProcessor, AutoModelForCausalLM, AutoModelForVision2Seq, AutoModel, BitsAndBytesConfig
         # AutoModelForImageTextToText is the v5+ replacement for Vision2Seq in Transformers
         try:
             from transformers import AutoModelForImageTextToText  # type: ignore
@@ -441,6 +447,22 @@ class Engine:
         if hf_token:
             # Only pass 'token' (use_auth_token is deprecated and causes conflicts)
             model_kwargs["token"] = hf_token
+
+        # Add quantization config if enabled
+        if LOAD_IN_4BIT:
+            try:
+                import torch
+                compute_dtype = getattr(torch, BNB_4BIT_COMPUTE_DTYPE, torch.float16)
+                quant_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=compute_dtype,
+                    bnb_4bit_use_double_quant=BNB_4BIT_USE_DOUBLE_QUANT,
+                    bnb_4bit_quant_type=BNB_4BIT_QUANT_TYPE,
+                )
+                model_kwargs["quantization_config"] = quant_config
+                _log(f"Using 4-bit quantization: {BNB_4BIT_QUANT_TYPE}, compute_dtype={BNB_4BIT_COMPUTE_DTYPE}, double_quant={BNB_4BIT_USE_DOUBLE_QUANT}")
+            except Exception as e:
+                _log(f"BitsAndBytes quantization failed: {e}; falling back to full precision")
 
         # Device and dtype resolution
         try:

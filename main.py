@@ -25,7 +25,7 @@ import tempfile
 import contextlib
 from typing import Any, Dict, List, Optional, Tuple, Deque, Literal
 
-from fastapi import FastAPI, HTTPException, Request, Header, Query
+from fastapi import FastAPI, HTTPException, Request, Header, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
@@ -954,6 +954,7 @@ tags_metadata = [
     {"name": "meta", "description": "Service metadata and OpenAPI schema"},
     {"name": "health", "description": "Readiness and runtime info including context window report"},
     {"name": "chat", "description": "OpenAI-compatible chat completions (non-stream and streaming SSE)"},
+    {"name": "ocr", "description": "Optical Character Recognition endpoints"},
 ]
 
 app = FastAPI(
@@ -1294,6 +1295,72 @@ def chat_completions(
         "X-Accel-Buffering": "no",
     }
     return StreamingResponse(sse_generator(), media_type="text/event-stream", headers=headers)
+
+
+@app.post("/ktp-ocr/", tags=["ocr"])
+async def ktp_ocr(image: UploadFile = File(...)):
+    try:
+        engine = get_engine()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Model not ready: {e}")
+
+    if not image.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File provided is not an image.")
+
+    try:
+        # Read image contents
+        contents = await image.read()
+        pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
+
+        # The prompt from the reference project
+        prompt = r"""
+Ekstrak data KTP Indonesia dari gambar dan kembalikan dalam format JSON berikut:
+{
+  "nik": "",
+  "nama": "",
+  "tempat_lahir": "",
+  "tgl_lahir": "",
+  "jenis_kelamin": "",
+  "alamat": {
+    "name": "",
+    "rt_rw": "",
+    "kel_desa": "",
+    "kecamatan": "",
+  },
+  "agama": "",
+  "status_perkawinan": "",
+  "pekerjaan": "",
+  "kewarganegaraan": "",
+  "berlaku_hingga": ""
+}
+"""
+        # Prepare messages for the model
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image", "image": pil_image}
+                ],
+            }
+        ]
+
+        # Infer
+        content = engine.infer(messages, max_tokens=1024, temperature=0.1)
+
+        # The model might return the JSON in a code block, so we need to extract it.
+        json_match = re.search(r"```json\n(.*?)```", content, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            json_str = content
+
+        # Parse the JSON string
+        response_data = json.loads(json_str)
+        return JSONResponse(content=response_data)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing image: {e}")
 
 
 @app.post("/v1/cancel/{session_id}", tags=["chat"], response_model=CancelResponse, summary="Cancel a streaming session")

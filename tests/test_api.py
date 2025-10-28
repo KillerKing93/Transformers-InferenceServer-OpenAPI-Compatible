@@ -272,3 +272,36 @@ def test_edge_large_last_event_id_after_finish_yields_done():
         with client.stream("POST", "/v1/chat/completions", headers=headers, json=payload) as resp2:
             lines2 = read_sse_lines(resp2)
         assert "[DONE]" in "\n".join(lines2)
+
+def test_ktp_ocr_success():
+    with patched_engine() as fake_engine:
+        # Configure the fake engine to return a specific JSON structure for this test
+        expected_json = {
+            "nik": "1234567890123456",
+            "nama": "JOHN DOE",
+            "tempat_lahir": "JAKARTA",
+            "tgl_lahir": "01-01-1990",
+            "jenis_kelamin": "LAKI-LAKI",
+            "alamat": {
+                "name": "JL. JEND. SUDIRMAN KAV. 52-53",
+                "rt_rw": "001/001",
+                "kel_desa": "SENAYAN",
+                "kecamatan": "KEBAYORAN BARU",
+            },
+            "agama": "ISLAM",
+            "status_perkawinan": "KAWIN",
+            "pekerjaan": "PEGAWAI SWASTA",
+            "kewarganegaraan": "WNI",
+            "berlaku_hingga": "SEUMUR HIDUP",
+        }
+        fake_engine.infer = lambda messages, max_tokens, temperature: json.dumps(expected_json)
+
+        client = get_client()
+        with open("image.jpg", "rb") as f:
+            files = {"image": ("image.jpg", f, "image/jpeg")}
+            r = client.post("/ktp-ocr/", files=files)
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["nik"] == "1234567890123456"
+        assert body["nama"] == "JOHN DOE"

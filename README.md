@@ -26,6 +26,28 @@ Model:
 
 Node.js artifacts and scripts from the previous project have been removed.
 
+## KTP OCR Endpoint
+
+This server includes a KTP (Indonesian ID Card) OCR endpoint that extracts structured data from KTP images using the multimodal model.
+
+- Endpoint: `POST /ktp-ocr/`
+- Input: Multipart form-data with `image` field (JPEG/PNG)
+- Output: JSON with fields like `nik`, `nama`, `tempat_lahir`, `tgl_lahir`, `jenis_kelamin`, `alamat`, `agama`, `status_perkawinan`, `pekerjaan`, `kewarganegaraan`, `berlaku_hingga`
+
+Example usage:
+```bash
+curl -X POST http://localhost:3000/ktp-ocr/ \
+  -F "image=@image.jpg"
+```
+
+This feature is inspired by [raflyryhnsyh/Gemini-OCR-KTP](https://github.com/raflyryhnsyh/Gemini-OCR-KTP), adapted to use our local Qwen3-VL model instead of Gemini AI.
+
+## Hugging Face Space
+
+The project is hosted on Hugging Face Spaces for easy access: [KillerKing93/Transformers-InferenceServer-OpenAPI](https://huggingface.co/spaces/KillerKing93/Transformers-InferenceServer-OpenAPI)
+
+You can use the Space's API endpoints directly or access the web UI.
+
 ## Quick Start
 
 ### Option 1: Run with Docker (with-model images: CPU / NVIDIA / AMD)
@@ -172,6 +194,12 @@ Endpoints (OpenAI-compatible)
   curl -X POST http://localhost:3000/v1/chat/completions ^
   -H "Content-Type: application/json" ^
   -d "{\"model\":\"qwen-local\",\"messages\":[{\"role\":\"user\",\"content\":\"Describe this image briefly\"}],\"max_tokens\":4096}"
+
+- KTP OCR
+  POST /ktp-ocr/
+  Example (Windows CMD):
+  curl -X POST http://localhost:3000/ktp-ocr/ ^
+  -F "image=@image.jpg"
 
   Example (PowerShell):
   $body = @{

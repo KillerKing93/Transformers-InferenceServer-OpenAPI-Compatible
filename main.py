@@ -1321,18 +1321,27 @@ def chat_completions(
 
 @app.post("/ktp-ocr/", tags=["ocr"])
 async def ktp_ocr(image: UploadFile = File(...)):
+    print(f"[OCR] Starting KTP OCR processing for file: {image.filename}, content_type: {image.content_type}")
+
     try:
         engine = get_engine()
+        print(f"[OCR] Engine ready: {engine.model_id}")
     except Exception as e:
+        print(f"[OCR] Engine not ready: {e}")
         raise HTTPException(status_code=503, detail=f"Model not ready: {e}")
 
     if not image.content_type.startswith("image/"):
+        print(f"[OCR] Invalid content type: {image.content_type}")
         raise HTTPException(status_code=400, detail="File provided is not an image.")
 
     try:
         # Read image contents
+        print(f"[OCR] Reading image contents...")
         contents = await image.read()
+        print(f"[OCR] Image size: {len(contents)} bytes")
+
         pil_image = Image.open(io.BytesIO(contents)).convert("RGB")
+        print(f"[OCR] PIL image loaded: {pil_image.size}, mode: {pil_image.mode}")
 
         # The prompt from the reference project
         prompt = r"""
@@ -1356,6 +1365,8 @@ Ekstrak data KTP Indonesia dari gambar dan kembalikan dalam format JSON berikut:
   "berlaku_hingga": ""
 }
 """
+        print(f"[OCR] Using prompt (length: {len(prompt)} chars)")
+
         # Prepare messages for the model
         messages = [
             {
@@ -1366,22 +1377,38 @@ Ekstrak data KTP Indonesia dari gambar dan kembalikan dalam format JSON berikut:
                 ],
             }
         ]
+        print(f"[OCR] Prepared messages with {len(messages[0]['content'])} content parts")
 
         # Infer
+        print(f"[OCR] Starting inference with max_tokens=1024, temperature=0.1")
         content = engine.infer(messages, max_tokens=1024, temperature=0.1)
+        print(f"[OCR] Raw inference result (length: {len(content)} chars): {repr(content[:200])}...")
 
         # The model might return the JSON in a code block, so we need to extract it.
-        json_match = re.search(r"```json\n(.*?)```", content, re.DOTALL)
+        json_match = re.search(r"```json\s*\n(.*?)\n```", content, re.DOTALL)
         if json_match:
-            json_str = json_match.group(1)
+            json_str = json_match.group(1).strip()
+            print(f"[OCR] Extracted JSON from code block (length: {len(json_str)} chars): {repr(json_str[:200])}...")
         else:
-            json_str = content
+            json_str = content.strip()
+            print(f"[OCR] Using raw content as JSON (length: {len(json_str)} chars): {repr(json_str[:200])}...")
 
         # Parse the JSON string
+        print(f"[OCR] Attempting to parse JSON...")
         response_data = json.loads(json_str)
+        print(f"[OCR] Successfully parsed JSON with keys: {list(response_data.keys())}")
+
         return JSONResponse(content=response_data)
 
+    except json.JSONDecodeError as e:
+        print(f"[OCR] JSON parsing failed: {e}")
+        print(f"[OCR] Failed JSON string: {repr(json_str[:500])}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse model response as JSON: {e}")
+
     except Exception as e:
+        print(f"[OCR] Unexpected error: {type(e).__name__}: {e}")
+        import traceback
+        print(f"[OCR] Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error processing image: {e}")
 
 

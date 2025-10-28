@@ -25,7 +25,7 @@ import tempfile
 import contextlib
 from typing import Any, Dict, List, Optional, Tuple, Deque, Literal
 
-from fastapi import FastAPI, HTTPException, Request, Header, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, Header, Query, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
@@ -41,6 +41,9 @@ from collections import deque
 import subprocess
 import sys
 import shutil
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import functools
 
 # Load env
 try:
@@ -76,14 +79,18 @@ HF_TOKEN = os.getenv("HF_TOKEN", "").strip() or None
 DEFAULT_MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
 DEFAULT_TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
 MAX_VIDEO_FRAMES = int(os.getenv("MAX_VIDEO_FRAMES", "16"))
-DEVICE_MAP = os.getenv("DEVICE_MAP", "auto")
-TORCH_DTYPE = os.getenv("TORCH_DTYPE", "auto")
+DEVICE_MAP = os.getenv("DEVICE_MAP", "cpu")  # Force CPU for current deployment
+TORCH_DTYPE = os.getenv("TORCH_DTYPE", "float32")  # float32 is faster on CPU
 
-# Quantization config (BitsAndBytes)
-LOAD_IN_4BIT = str(os.getenv("LOAD_IN_4BIT", "1")).lower() in ("1", "true", "yes", "y")
+# Quantization config (BitsAndBytes) - disabled for CPU deployment
+LOAD_IN_4BIT = str(os.getenv("LOAD_IN_4BIT", "0")).lower() in ("1", "true", "yes", "y")  # Disabled
 BNB_4BIT_COMPUTE_DTYPE = os.getenv("BNB_4BIT_COMPUTE_DTYPE", "float16")
 BNB_4BIT_USE_DOUBLE_QUANT = str(os.getenv("BNB_4BIT_USE_DOUBLE_QUANT", "1")).lower() in ("1", "true", "yes", "y")
 BNB_4BIT_QUANT_TYPE = os.getenv("BNB_4BIT_QUANT_TYPE", "nf4")
+
+# Concurrency config
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))  # Thread pool for concurrent processing
+OCR_TIMEOUT_SECONDS = int(os.getenv("OCR_TIMEOUT_SECONDS", "120"))  # 2 minute timeout for OCR
 
 # Persistent session store (SQLite)
 PERSIST_SESSIONS = str(os.getenv("PERSIST_SESSIONS", "0")).lower() in ("1", "true", "yes", "y")
@@ -100,6 +107,9 @@ COMPRESSION_STRATEGY = os.getenv("COMPRESSION_STRATEGY", "truncate")  # truncate
 
 # Eager model loading (download/check at startup before serving traffic)
 EAGER_LOAD_MODEL = str(os.getenv("EAGER_LOAD_MODEL", "1")).lower() in ("1", "true", "yes", "y")
+
+# Global thread pool executor for concurrent processing
+executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="inference")
 
 def _log(msg: str):
     # Consistent, flush-immediate startup logs
@@ -1114,7 +1124,7 @@ def health():
         }
     },
 )
-def chat_completions(
+async def chat_completions(
     request: Request,
     body: ChatRequest,
     last_event_id: Optional[str] = Query(default=None, alias="last_event_id", description="Resume SSE from this id: 'session_id:index'"),
@@ -1379,9 +1389,13 @@ Ekstrak data KTP Indonesia dari gambar dan kembalikan dalam format JSON berikut:
         ]
         print(f"[OCR] Prepared messages with {len(messages[0]['content'])} content parts")
 
-        # Infer
-        print(f"[OCR] Starting inference with max_tokens=1024, temperature=0.1")
-        content = engine.infer(messages, max_tokens=1024, temperature=0.1)
+        # Run inference in thread pool to avoid blocking
+        print(f"[OCR] Submitting to thread pool (timeout: {OCR_TIMEOUT_SECONDS}s)...")
+        loop = asyncio.get_event_loop()
+        content = await loop.run_in_executor(
+            executor,
+            functools.partial(engine.infer, messages, 1024, 0.1)
+        )
         print(f"[OCR] Raw inference result (length: {len(content)} chars): {repr(content[:200])}...")
 
         # The model might return the JSON in a code block, so we need to extract it.

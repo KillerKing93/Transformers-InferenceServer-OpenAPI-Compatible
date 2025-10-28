@@ -6,7 +6,7 @@ Key source files
 - Server entry: [main.py](main.py)
 - Inference engine: [Python.class Engine](main.py:231)
 - Multimodal parsing: [Python.function build_mm_messages](main.py:251), [Python.function load_image_from_any](main.py:108), [Python.function load_video_frames_from_any](main.py:150)
-- Endpoints: Health [Python.app.get()](main.py:577), Chat Completions [Python.app.post()](main.py:591), Cancel [Python.app.post()](main.py:792)
+- Endpoints: Health [Python.app.get()](main.py:577), Chat Completions [Python.app.post()](main.py:591), Cancel [Python.app.post()](main.py:792), KTP OCR [Python.app.post()](main.py:1310)
 - Streaming + resume: [Python.class _SSESession](main.py:435), [Python.class _SessionStore](main.py:449), [Python.class _SQLiteStore](main.py:482), [Python.function chat_completions](main.py:591)
 - Local run (uvicorn): [Python.main()](main.py:807)
 - Configuration template: [.env.example](.env.example)
@@ -34,6 +34,7 @@ Two response modes are implemented:
   - Health: [Python.app.get()](main.py:577)
   - Chat Completions (non-stream + SSE): [Python.app.post()](main.py:591)
   - Manual cancel (custom): [Python.app.post()](main.py:792)
+  - KTP OCR: [Python.app.post()](main.py:1310)
 - CORS is enabled for simplicity.
 
 2) Inference Engine (Transformers)
@@ -95,6 +96,13 @@ Streaming (POST /v1/chat/completions with "stream": true)
 Manual cancel (POST /v1/cancel/{session_id})
 - Custom operational shortcut to cancel an in-flight generation for a session id.
 - This is not part of the legacy OpenAI Chat Completions spec (OpenAI’s newer Responses API defines cancel); it is provided for practical control.
+
+KTP OCR (POST /ktp-ocr/)
+- Specialized endpoint for Indonesian ID card (KTP) optical character recognition.
+- Accepts multipart form-data with image file, extracts structured JSON data using multimodal inference.
+- Returns standardized fields: nik, nama, tempat_lahir, tgl_lahir, jenis_kelamin, alamat (with nested fields), agama, status_perkawinan, pekerjaan, kewarganegaraan, berlaku_hingga.
+- Uses custom prompt engineering for accurate structured extraction from Qwen3-VL model.
+- Inspired by raflyryhnsyh/Gemini-OCR-KTP but adapted for local, self-hosted inference.
 
 ## Message and content mapping
 

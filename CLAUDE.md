@@ -257,3 +257,39 @@ Example (filled)
     - Streaming emits chunks, ends with [DONE]; resume replays after index; cancel terminates generation; auto-cancel after disconnect threshold works via timer + stopping criteria.
 - Follow-ups:
   - Optional Redis store for multi-process coordination.
+
+## Progress Log — 2025-10-28 23:13 (Asia/Jakarta)
+
+- Commit: c60d35d - feat(ocr): add KTP OCR endpoint using Qwen3-VL model
+- Scope/Files (anchors):
+  - [Python.function ktp_ocr](main.py:1310)
+  - [Python.function build_mm_messages](main.py:251)
+  - [Python.function infer](main.py:326)
+  - [Python.function test_ktp_ocr_success](tests/test_api.py:276)
+  - [README.md](README.md:1), [ARCHITECTURE.md](ARCHITECTURE.md:1), [CLAUDE.md](CLAUDE.md:1)
+- Summary:
+  - Added KTP OCR endpoint for Indonesian ID card text extraction using Qwen3-VL multimodal model. Inspired by raflyryhnsyh/Gemini-OCR-KTP but adapted for local inference without external API dependencies.
+- Changes:
+  - Implement POST /ktp-ocr/ endpoint accepting multipart form-data with image file
+  - Use custom prompt to extract structured JSON data (nik, nama, alamat fields, etc.)
+  - Integrate with existing Engine.infer() for multimodal processing
+  - Add robust JSON extraction with fallback parsing (handles model responses in code blocks)
+  - Update tags_metadata to include "ocr" endpoint category
+  - Add comprehensive test case with mock JSON response validation
+  - Update README with KTP OCR documentation, usage examples, and credit to original project
+  - Update ARCHITECTURE.md to document the new endpoint
+- Verification:
+  - KTP OCR endpoint test:
+    curl -X POST http://localhost:3000/ktp-ocr/ ^
+      -F "image=@image.jpg"
+  - Expected vs Actual: Returns JSON with structured KTP data fields (nik, nama, alamat object, etc.)
+  - Test suite: All 10 tests pass including new KTP OCR test
+  - FastAPI import: No syntax errors, app loads successfully
+- Follow-ups/Limitations:
+  - Model accuracy depends on Qwen3-VL training data for Indonesian text
+  - JSON parsing is best-effort; may need refinement for edge cases
+  - Consider adding image preprocessing (resize, enhance contrast) for better OCR
+- Notes:
+  - Endpoint maintains OpenAI-compatible API patterns while providing specialized OCR functionality
+  - No external API keys required; fully self-hosted solution
+  - CI/CD will sync to Hugging Face Space automatically on push

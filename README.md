@@ -17,7 +17,7 @@ Key files:
 - Server entry: [main.py](main.py)
 - Environment template: [.env.example](.env.example)
 - Python dependencies: [requirements.txt](requirements.txt)
-- Architecture: [ARCHITECTURE.md](ARCHITECTURE.md) (will be updated to reflect the Python stack)
+- Architecture: [ARCHITECTURE.md](ARCHITECTURE.md)
 
 Model:
 
@@ -295,7 +295,7 @@ License
 
 Changelog and Architecture
 
-- We will update [ARCHITECTURE.md](ARCHITECTURE.md) to reflect the Python server flow.
+- See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed technical documentation and [CLAUDE.md](CLAUDE.md) for development progress logs.
 
 ## Streaming behavior, resume, and reconnections
 
